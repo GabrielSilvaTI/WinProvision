@@ -52,7 +52,7 @@ $Script:OtpSources = @(
     @{
         type    = "zip"
         label   = "Cloudflare R2 (ZIP privado)"
-        url     = "https://pub-8ccaa5a975d84c6b89070ab9a01521c0.r2.dev/Office/Office%20Tool.zip"
+        url     = "https://github.com/GabrielSilvaTI/WinProvision/releases/download/v1.0.0/Office.Tool.zip"
         zipFile = "$Script:WorkDir\OTP_R2.zip"
         extDir  = "$Script:WorkDir\OTP_R2"
     },
