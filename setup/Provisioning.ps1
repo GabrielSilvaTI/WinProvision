@@ -23,10 +23,9 @@ Write-Host ""
 Write-Host ""
 Write-Host "This script will attempt to install the following packages:"
 Write-Host "  - WinRAR from WinGet"
-Write-Host "  - Hydra from WinGet"
 Write-Host "  - Steam from WinGet"
+Write-Host "  - Hydra from WinGet"
 Write-Host "  - LocalSend from WinGet"
-Write-Host "  - Epson Scan 2 from WinGet"
 Write-Host "  - Google Chrome from WinGet"
 Write-Host ""
 Clear-Host
@@ -38,10 +37,9 @@ $results=""
 
 $commands= @(
     'cmd.exe /C winget.exe install --id "RARLab.WinRAR" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
-    'cmd.exe /C winget.exe install --id "HydraLauncher.Hydra" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
     'cmd.exe /C winget.exe install --id "Valve.Steam" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
+    'cmd.exe /C winget.exe install --id "HydraLauncher.Hydra" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
     'cmd.exe /C winget.exe install --id "LocalSend.LocalSend" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
-    'cmd.exe /C winget.exe install --id "EPSON.EpsonScan2" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force',
     'cmd.exe /C winget.exe install --id "Google.Chrome" --exact --source winget --accept-source-agreements --disable-interactivity --silent --accept-package-agreements --force'
 )
 
