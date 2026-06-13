@@ -33,7 +33,7 @@ $CFG = @{
     PayloadLog           = "$env:SystemRoot\Temp\CloudProvisioning\Payload_Output.log"
 
     WingetZipUrl         = "https://pub-8ccaa5a975d84c6b89070ab9a01521c0.r2.dev/Provisionamento/winget.zip"
-    PayloadUrl           = "https://pub-8ccaa5a975d84c6b89070ab9a01521c0.r2.dev/Provisionamento/Provisioning.ps1"
+    PayloadUrl           = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/Provisioning.ps1"
 
     WingetZipPath        = "$env:SystemRoot\Temp\winget_bootstrap.zip"
     WingetExtDir         = "$env:SystemRoot\Temp\WingetBootstrap"
