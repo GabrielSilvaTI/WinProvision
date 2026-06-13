@@ -1,4 +1,4 @@
-# WinProvision Orquestrador Master (Serializado)
+# WinProvision Orquestrador Master - Modo Robusto
 $BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup"
 
 $Scripts = @(
@@ -8,17 +8,22 @@ $Scripts = @(
     "MAS.ps1"
 )
 
-foreach ($Script in $Scripts) {
-    $FullUrl = "$BaseUrl/$Script"
-    Write-Host "--- Executando: $Script ---" -ForegroundColor Cyan
+foreach ($ScriptName in $Scripts) {
+    $Url = "$BaseUrl/$ScriptName"
+    Write-Host "--- Baixando e executando: $ScriptName ---" -ForegroundColor Cyan
     
-    # Inicia um novo processo PowerShell para cada script e AGUARDA a conclusão
-    $process = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm '$FullUrl' | iex`"" -Wait -NoNewWindow -PassThru
-    
-    # Verifica se houve erro no processo
-    if ($process.ExitCode -ne 0) {
-        Write-Host "Atenção: O script $Script terminou com erros (Código: $($process.ExitCode))." -ForegroundColor Yellow
+    try {
+        # 1. Baixa o conteúdo do script
+        $code = Invoke-RestMethod -Uri $Url
+        
+        # 2. Executa o código baixado no escopo atual, mas garantindo término
+        # O '&' (call operator) é mais seguro para rodar scripts baixados
+        Invoke-Expression $code
+        
+        Write-Host "--- $ScriptName finalizado. ---" -ForegroundColor Green
+    } catch {
+        Write-Host "Falha crítica em $ScriptName : $_" -ForegroundColor Red
     }
 }
 
-Write-Host "--- Provisionamento concluído com sucesso! ---" -ForegroundColor Green
+Write-Host "--- Todos os processos finalizados. ---" -ForegroundColor Green
