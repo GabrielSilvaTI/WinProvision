@@ -1,14 +1,16 @@
 <#
 .SYNOPSIS
     Bootstrap Cloud Provisioning Enterprise — Unified Headless Edition v4.6
+    Interface aprimorada com barra de progresso, layout profissional e sem alteração de escopo.
 .DESCRIPTION
     Orquestrador 100% autônomo para Windows 10/11.
     Compatível com: FirstLogon / SetupComplete / MDM / Windows Sandbox / SYSTEM.
 
-    Correção v4.6:
-        - Adicionado fechamento da janela do console quando em modo interativo (testes manuais)
-        - Mantém comportamento headless em OOBE/SetupComplete (sem janela para fechar)
-        - Força saída imediata com [Environment]::Exit(0) após qualquer tentativa de fechamento
+    Melhorias visuais:
+        - Barra de progresso global (Write-Progress)
+        - Indicadores de etapa com cores e ícones
+        - Layout de bordas e cabeçalho profissional
+        - Mantém toda a lógica original intacta
 #>
 
 [CmdletBinding()]
@@ -25,7 +27,7 @@ $ProgressPreference    = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CONFIGURAÇÃO CENTRAL
+#  CONFIGURAÇÃO CENTRAL (inalterada)
 # ══════════════════════════════════════════════════════════════════════════════
 $CFG = @{
     LogDir               = "$env:SystemRoot\Temp\CloudProvisioning"
@@ -55,7 +57,7 @@ $CFG = @{
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  SISTEMA DE LOG
+#  SISTEMA DE LOG (melhorado visualmente)
 # ══════════════════════════════════════════════════════════════════════════════
 $script:LogReady = $false
 $script:StartTime = Get-Date
@@ -91,10 +93,28 @@ function Write-Log {
 
 function Write-Banner {
     param([string]$Text)
-    $sep = "=" * 62
-    Write-Log $sep        "STEP"
-    Write-Log "  $Text"  "STEP"
-    Write-Log $sep        "STEP"
+    $sep = "═" * 62
+    Write-Host "`n╔$sep╗" -ForegroundColor Magenta
+    Write-Host "║  $Text".PadRight(63) -ForegroundColor Cyan
+    Write-Host "╚$sep╝" -ForegroundColor Magenta
+    Write-Log $Text "STEP"
+}
+
+function Write-Header {
+    Clear-Host
+    Write-Host @"
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                   CLOUD PROVISIONING BOOTSTRAP v4.6                          ║
+║                         Enterprise Headless Edition                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"@ -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  🖥️  Máquina   : $env:COMPUTERNAME" -ForegroundColor White
+    Write-Host "  👤  Usuário   : $env:USERNAME" -ForegroundColor White
+    Write-Host "  🧠  OS        : $(([System.Environment]::OSVersion).VersionString)" -ForegroundColor White
+    Write-Host "  🐚  PowerShell: $($PSVersionTable.PSVersion)" -ForegroundColor White
+    Write-Host "  📄  Log       : $($CFG.LogFile)" -ForegroundColor White
+    Write-Host ""
 }
 
 function Test-GlobalTimeout {
@@ -105,7 +125,7 @@ function Test-GlobalTimeout {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HELPER: Start-Process totalmente headless + stdin=NUL
+#  HELPER: Start-Process totalmente headless + stdin=NUL (inalterado)
 # ══════════════════════════════════════════════════════════════════════════════
 function Start-Headless {
     param(
@@ -155,7 +175,7 @@ function Start-Headless {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PROXY DETECTION
+#  PROXY DETECTION (inalterado)
 # ══════════════════════════════════════════════════════════════════════════════
 function Get-SystemProxy {
     try {
@@ -170,13 +190,17 @@ function Get-SystemProxy {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ETAPA 1 — CONECTIVIDADE DE REDE
+#  ETAPA 1 — CONECTIVIDADE DE REDE (com barra de progresso)
 # ══════════════════════════════════════════════════════════════════════════════
 function Test-NetworkReady {
     Write-Log "Verificando conectividade de rede..." "STEP"
     $proxy = Get-SystemProxy
     for ($i = 1; $i -le $CFG.NetMaxRetries; $i++) {
         Test-GlobalTimeout
+
+        $percent = [math]::Round(($i / $CFG.NetMaxRetries) * 100)
+        Write-Progress -Activity "🌐 Verificando rede" -Status "Tentativa $i de $($CFG.NetMaxRetries)" -PercentComplete $percent
+
         foreach ($url in $CFG.NetTestUrls) {
             try {
                 $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
@@ -188,6 +212,7 @@ function Test-NetworkReady {
                 }
                 $resp = $req.GetResponse()
                 $resp.Close()
+                Write-Progress -Activity "🌐 Rede OK" -Completed
                 Write-Log "Rede OK via $url (tentativa $i)." "SUCCESS"
                 return $true
             } catch { }
@@ -197,11 +222,12 @@ function Test-NetworkReady {
             Start-Sleep -Seconds $CFG.NetRetryDelaySec
         }
     }
+    Write-Progress -Activity "🌐 Rede" -Completed
     return $false
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DOWNLOAD RESILIENTE (buffer de 1 MB)
+#  DOWNLOAD RESILIENTE (com barra de progresso e velocidade)
 # ══════════════════════════════════════════════════════════════════════════════
 function Invoke-Download {
     param(
@@ -217,6 +243,9 @@ function Invoke-Download {
         Test-GlobalTimeout
         Write-Log "Download [$attempt/$($CFG.DlMaxRetries)] $Label" "INFO"
 
+        # Inicia progresso
+        Write-Progress -Activity "📥 Baixando $Label" -Status "Tentativa $attempt" -PercentComplete 0
+
         # Método A: HttpWebRequest
         try {
             $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($Url)
@@ -227,19 +256,33 @@ function Invoke-Download {
                 $req.Proxy = New-Object System.Net.WebProxy($proxy, $true)
             }
             $resp = $req.GetResponse()
+            $totalBytes = $resp.ContentLength
             $stream = $resp.GetResponseStream()
             $fs = [System.IO.File]::Open($Destination, [System.IO.FileMode]::Create,
                                           [System.IO.FileAccess]::Write,
                                           [System.IO.FileShare]::None)
             $buf = New-Object byte[] 1048576
+            $downloaded = 0
+            $lastPercent = 0
             do {
                 $read = $stream.Read($buf, 0, $buf.Length)
-                if ($read -gt 0) { $fs.Write($buf, 0, $read) }
+                if ($read -gt 0) {
+                    $fs.Write($buf, 0, $read)
+                    $downloaded += $read
+                    if ($totalBytes -gt 0) {
+                        $percent = [math]::Round(($downloaded / $totalBytes) * 100)
+                        if ($percent -ne $lastPercent) {
+                            Write-Progress -Activity "📥 Baixando $Label" -Status "$($percent)% concluído" -PercentComplete $percent
+                            $lastPercent = $percent
+                        }
+                    }
+                }
             } while ($read -gt 0)
             $fs.Flush(); $fs.Close()
             $stream.Close(); $resp.Close()
             $size = (Get-Item $Destination -ErrorAction SilentlyContinue).Length
             if ($size -gt 0) {
+                Write-Progress -Activity "📥 $Label" -Completed
                 Write-Log "  OK via HttpWebRequest ($([Math]::Round($size/1KB,1)) KB)." "SUCCESS"
                 return
             }
@@ -249,13 +292,14 @@ function Invoke-Download {
             if (Test-Path $Destination) { Remove-Item $Destination -Force -ErrorAction SilentlyContinue }
         }
 
-        # Método B: BITS
+        # Método B: BITS (sem barra de progresso para não complicar)
         try {
             $bitsCmd = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
             if ($bitsCmd) {
                 Start-BitsTransfer -Source $Url -Destination $Destination -Priority Foreground -ErrorAction Stop
                 $size = (Get-Item $Destination -ErrorAction SilentlyContinue).Length
                 if ($size -gt 0) {
+                    Write-Progress -Activity "📥 $Label" -Completed
                     Write-Log "  OK via BITS ($([Math]::Round($size/1KB,1)) KB)." "SUCCESS"
                     return
                 }
@@ -276,6 +320,7 @@ function Invoke-Download {
             $wc.DownloadFile($Url, $Destination)
             $size = (Get-Item $Destination -ErrorAction SilentlyContinue).Length
             if ($size -gt 0) {
+                Write-Progress -Activity "📥 $Label" -Completed
                 Write-Log "  OK via WebClient ($([Math]::Round($size/1KB,1)) KB)." "SUCCESS"
                 return
             }
@@ -290,11 +335,12 @@ function Invoke-Download {
             Start-Sleep -Seconds $CFG.DlRetryDelaySec
         }
     }
+    Write-Progress -Activity "📥 $Label" -Completed
     throw "FALHA PERMANENTE: impossível baixar '$Label'."
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  EXTRAÇÃO DE ZIP — TRIPLO FALLBACK
+#  EXTRAÇÃO DE ZIP (com barra de progresso)
 # ══════════════════════════════════════════════════════════════════════════════
 function Expand-ZipSafe {
     param(
@@ -311,12 +357,15 @@ function Expand-ZipSafe {
     if (Test-Path $DestDir) { Remove-Item $DestDir -Recurse -Force -ErrorAction SilentlyContinue }
     New-Item -Path $DestDir -ItemType Directory -Force | Out-Null
 
+    Write-Progress -Activity "📦 Extraindo ZIP" -Status "Usando método ZipFile.NET" -PercentComplete 10
+
     # Método A: ZipFile .NET
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
         [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $DestDir)
         $count = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue).Count
         if ($count -gt 0) {
+            Write-Progress -Activity "📦 Extração concluída" -Completed
             Write-Log "  Extração OK via ZipFile.NET ($count arquivo(s))." "SUCCESS"
             return
         }
@@ -327,11 +376,14 @@ function Expand-ZipSafe {
         New-Item -Path $DestDir -ItemType Directory -Force | Out-Null
     }
 
+    Write-Progress -Activity "📦 Extraindo ZIP" -Status "Usando Expand-Archive" -PercentComplete 30
+
     # Método B: Expand-Archive
     try {
         Expand-Archive -Path $ZipPath -DestinationPath $DestDir -Force -ErrorAction Stop
         $count = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue).Count
         if ($count -gt 0) {
+            Write-Progress -Activity "📦 Extração concluída" -Completed
             Write-Log "  Extração OK via Expand-Archive ($count arquivo(s))." "SUCCESS"
             return
         }
@@ -341,6 +393,8 @@ function Expand-ZipSafe {
         if (Test-Path $DestDir) { Remove-Item $DestDir -Recurse -Force -ErrorAction SilentlyContinue }
         New-Item -Path $DestDir -ItemType Directory -Force | Out-Null
     }
+
+    Write-Progress -Activity "📦 Extraindo ZIP" -Status "Usando Shell.Application COM" -PercentComplete 50
 
     # Método C: Shell.Application COM
     try {
@@ -353,11 +407,13 @@ function Expand-ZipSafe {
         for ($wait = 0; $wait -le 15; $wait++) {
             Start-Sleep -Milliseconds 500
             $currentCount = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue).Count
+            Write-Progress -Activity "📦 Extraindo ZIP" -Status "Copiando arquivos... ($currentCount encontrados)" -PercentComplete (50 + $wait*3)
             if ($currentCount -gt 0 -and $currentCount -eq $lastCount) { break }
             $lastCount = $currentCount
         }
         $count = (Get-ChildItem $DestDir -Recurse -File -ErrorAction SilentlyContinue).Count
         if ($count -gt 0) {
+            Write-Progress -Activity "📦 Extração concluída" -Completed
             Write-Log "  Extração OK via Shell.Application COM ($count arquivo(s))." "SUCCESS"
             return
         }
@@ -366,11 +422,12 @@ function Expand-ZipSafe {
         Write-Log "  Shell.Application COM: $($_.Exception.Message)" "WARN"
     }
 
+    Write-Progress -Activity "📦 Extração" -Completed
     throw "FALHA PERMANENTE: nenhum método conseguiu extrair '$ZipPath'."
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  WINGET
+#  WINGET (funções inalteradas, mas com progresso no Install-WingetFromZip)
 # ══════════════════════════════════════════════════════════════════════════════
 function Resolve-WingetExe {
     $c = Get-Command winget -ErrorAction SilentlyContinue
@@ -468,8 +525,11 @@ function Install-AppxPackageSafe {
 
 function Install-WingetFromZip {
     Write-Log "Instalando Winget a partir do ZIP..." "STEP"
+    Write-Progress -Activity "📦 Instalação do Winget" -Status "Baixando winget.zip" -PercentComplete 10
 
     Invoke-Download -Url $CFG.WingetZipUrl -Destination $CFG.WingetZipPath -Label "winget.zip"
+    
+    Write-Progress -Activity "📦 Instalação do Winget" -Status "Extraindo winget.zip" -PercentComplete 30
     Expand-ZipSafe  -ZipPath $CFG.WingetZipPath -DestDir $CFG.WingetExtDir
 
     $packages = Get-ChildItem -Path $CFG.WingetExtDir `
@@ -490,24 +550,31 @@ function Install-WingetFromZip {
         throw "Nenhum pacote MSIX/APPX encontrado em '$($CFG.WingetExtDir)'."
     }
 
+    $total = $packages.Count
     $installed = 0
-    foreach ($pkg in $packages) {
+    foreach ($idx in 0..($total-1)) {
+        $pkg = $packages[$idx]
+        $percent = 40 + [math]::Round(($idx / $total) * 50)
+        Write-Progress -Activity "📦 Instalação do Winget" -Status "Instalando $($pkg.Name)..." -PercentComplete $percent
         if (Install-AppxPackageSafe -PackagePath $pkg.FullName) { $installed++ }
     }
-    Write-Log "Pacotes processados: $installed / $($packages.Count)" "INFO"
+    Write-Log "Pacotes processados: $installed / $total" "INFO"
 
     Write-Log "Aguardando registro pelo Windows ($($CFG.AppxInstallWaitSec)s)..." "INFO"
     Start-Sleep -Seconds $CFG.AppxInstallWaitSec
+    Write-Progress -Activity "📦 Instalação do Winget" -Completed
 }
 
 function Assert-Winget {
     Write-Log "Verificando Winget no sistema..." "STEP"
+    Write-Progress -Activity "🔧 Verificando Winget" -Status "Procurando winget.exe" -PercentComplete 10
 
     $wingetExe = Resolve-WingetExe
     if ($wingetExe) {
         $dir = Split-Path $wingetExe -Parent
         if ($env:PATH -notlike "*$dir*") { $env:PATH = "$env:PATH;$dir" }
         if (Test-WingetFunctional -WingetExe $wingetExe) {
+            Write-Progress -Activity "🔧 Winget" -Completed
             return $wingetExe
         }
         Write-Log "Winget localizado mas não funcional. Reinstalando..." "WARN"
@@ -529,11 +596,12 @@ function Assert-Winget {
         throw "Winget instalado mas não responde com --version."
     }
 
+    Write-Progress -Activity "🔧 Winget" -Completed
     return $wingetExe
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  EXECUÇÃO ISOLADA DO PAYLOAD (sem fallback)
+#  EXECUÇÃO ISOLADA DO PAYLOAD (com barra de progresso)
 # ══════════════════════════════════════════════════════════════════════════════
 function Invoke-PayloadIsolated {
     param(
@@ -541,6 +609,7 @@ function Invoke-PayloadIsolated {
         [string]$WingetDir = ""
     )
     Write-Log "Iniciando execução isolada do payload..." "STEP"
+    Write-Progress -Activity "⚙️ Executando Provisioning" -Status "Preparando ambiente..." -PercentComplete 0
 
     $outTmp = "$($CFG.LogDir)\payload_stdout.tmp"
     $errTmp = "$($CFG.LogDir)\payload_stderr.tmp"
@@ -562,6 +631,8 @@ function Invoke-PayloadIsolated {
         $env:PATH = "$env:PATH;$WingetDir"
     }
 
+    Write-Progress -Activity "⚙️ Executando Provisioning" -Status "Executando script..." -PercentComplete 30
+
     $exitCode = -1
     try {
         $psArgs  = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$ScriptPath`""
@@ -569,6 +640,8 @@ function Invoke-PayloadIsolated {
                                    -Arguments $psArgs `
                                    -StdOutFile $outTmp `
                                    -StdErrFile $errTmp
+
+        Write-Progress -Activity "⚙️ Executando Provisioning" -Status "Coletando saída..." -PercentComplete 80
 
         $outText  = if (Test-Path $outTmp) { Get-Content $outTmp -Raw -ErrorAction SilentlyContinue } else { "" }
         $errText  = if (Test-Path $errTmp) { Get-Content $errTmp -Raw -ErrorAction SilentlyContinue } else { "" }
@@ -604,13 +677,14 @@ function Invoke-PayloadIsolated {
         foreach ($f in @($outTmp, $errTmp)) {
             if (Test-Path $f) { Remove-Item $f -Force -ErrorAction SilentlyContinue }
         }
+        Write-Progress -Activity "⚙️ Executando Provisioning" -Completed
     }
 
     return 0
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  LIMPEZA
+#  LIMPEZA (inalterada)
 # ══════════════════════════════════════════════════════════════════════════════
 function Invoke-Cleanup {
     if ($SkipCleanup) {
@@ -626,10 +700,11 @@ function Invoke-Cleanup {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  ORQUESTRADOR PRINCIPAL
+#  ORQUESTRADOR PRINCIPAL (com barra de progresso global)
 # ══════════════════════════════════════════════════════════════════════════════
 function Main {
     Initialize-Log
+    Write-Header
 
     Write-Banner "CLOUD PROVISIONING BOOTSTRAP  v4.6  //  ENTERPRISE HEADLESS"
     Write-Log "Máquina     : $env:COMPUTERNAME"
@@ -638,35 +713,77 @@ function Main {
     Write-Log "PowerShell  : $($PSVersionTable.PSVersion)"
     Write-Log "Log         : $($CFG.LogFile)"
 
+    # Barra de progresso geral com 4 etapas
+    $globalProgressParams = @{
+        Activity = "🚀 Cloud Provisioning Bootstrap v4.6"
+        Status   = "Inicializando..."
+        PercentComplete = 0
+    }
+
     try {
+        # Etapa 1/4 - Rede
+        $globalProgressParams.Status = "Etapa 1/4: Verificando rede"
+        $globalProgressParams.PercentComplete = 5
+        Write-Progress @globalProgressParams
         Write-Banner "ETAPA 1 / 4  -  Conectividade de Rede"
         if (-not (Test-NetworkReady)) {
             throw "Sem acesso à internet após $($CFG.NetMaxRetries) tentativas."
         }
+        $globalProgressParams.PercentComplete = 25
+        Write-Progress @globalProgressParams
 
+        # Etapa 2/4 - Winget
+        $globalProgressParams.Status = "Etapa 2/4: Subsistema Winget"
+        $globalProgressParams.PercentComplete = 30
+        Write-Progress @globalProgressParams
         Write-Banner "ETAPA 2 / 4  -  Subsistema Winget"
         $wingetExe = Assert-Winget
         $wingetDir = Split-Path $wingetExe -Parent
         Write-Log "Winget em uso: $wingetExe" "INFO"
+        $globalProgressParams.PercentComplete = 60
+        Write-Progress @globalProgressParams
 
+        # Etapa 3/4 - Download Payload
+        $globalProgressParams.Status = "Etapa 3/4: Baixando payload"
+        $globalProgressParams.PercentComplete = 65
+        Write-Progress @globalProgressParams
         Write-Banner "ETAPA 3 / 4  -  Download do Payload"
         Invoke-Download -Url $CFG.PayloadUrl -Destination $CFG.PayloadPath -Label "Provisioning.ps1"
         Write-Log "Payload pronto: $($CFG.PayloadPath)" "SUCCESS"
+        $globalProgressParams.PercentComplete = 80
+        Write-Progress @globalProgressParams
 
+        # Etapa 4/4 - Execução Payload
+        $globalProgressParams.Status = "Etapa 4/4: Executando provisionamento"
+        $globalProgressParams.PercentComplete = 85
+        Write-Progress @globalProgressParams
         Write-Banner "ETAPA 4 / 4  -  Execução do Payload"
         $exitCode = Invoke-PayloadIsolated -ScriptPath $CFG.PayloadPath -WingetDir $wingetDir
 
+        $globalProgressParams.Status = "Finalizando"
+        $globalProgressParams.PercentComplete = 95
+        Write-Progress @globalProgressParams
+
         Write-Banner "RESULTADO FINAL"
         Write-Log "Provisionamento concluído com SUCESSO." "SUCCESS"
+        $globalProgressParams.Status = "Concluído com sucesso"
+        $globalProgressParams.PercentComplete = 100
+        Write-Progress @globalProgressParams
+        Start-Sleep -Milliseconds 500
     }
     catch {
         Write-Log "ERRO CRÍTICO: $($_.Exception.Message)" "ERROR"
         Write-Log "Local       : $($_.InvocationInfo.PositionMessage)" "ERROR"
+        $globalProgressParams.Status = "ERRO: $($_.Exception.Message)"
+        $globalProgressParams.PercentComplete = 100
+        Write-Progress @globalProgressParams
+        Start-Sleep -Milliseconds 500
     }
     finally {
         Invoke-Cleanup
         Write-Banner "BOOTSTRAP ENCERRADO"
         Write-Log "Logs em: $($CFG.LogDir)"
+        Write-Progress -Activity "🚀 Cloud Provisioning Bootstrap v4.6" -Completed
     }
 }
 
