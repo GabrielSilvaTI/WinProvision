@@ -1,3 +1,7 @@
+Orquestrador:
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/Setup.cmd', 'C:\Windows\Temp\Setup.cmd'); Start-Process 'C:\Windows\Temp\Setup.cmd' -Wait"
+
 Bootstrap: 
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/main/setup/Bootstrap.ps1' | iex"
