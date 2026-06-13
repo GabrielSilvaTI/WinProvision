@@ -10,3 +10,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointMan
 MAS:
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/MAS.ps1' | iex"
+
+Unattend:
+
+https://schneegans.de/windows/unattend-generator/
