@@ -1,20 +1,24 @@
-# WinProvision Orquestrador Master
-# Ordem: Tema > Bootstrap > Office > MAS
-
+# WinProvision Orquestrador Master (Serializado)
 $BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup"
 
 $Scripts = @(
-    "$BaseUrl/theme.ps1",
-    "$BaseUrl/Bootstrap.ps1",
-    "$BaseUrl/Office.ps1",
-    "$BaseUrl/MAS.ps1"
+    "theme.ps1",
+    "Bootstrap.ps1",
+    "Office.ps1",
+    "MAS.ps1"
 )
 
 foreach ($Script in $Scripts) {
-    Write-Host "Iniciando processo: $Script" -ForegroundColor Cyan
-    try {
-        Invoke-RestMethod -Uri $Script | Invoke-Expression
-    } catch {
-        Write-Host "Falha ao executar $Script : $_" -ForegroundColor Red
+    $FullUrl = "$BaseUrl/$Script"
+    Write-Host "--- Executando: $Script ---" -ForegroundColor Cyan
+    
+    # Inicia um novo processo PowerShell para cada script e AGUARDA a conclusão
+    $process = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command `"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm '$FullUrl' | iex`"" -Wait -NoNewWindow -PassThru
+    
+    # Verifica se houve erro no processo
+    if ($process.ExitCode -ne 0) {
+        Write-Host "Atenção: O script $Script terminou com erros (Código: $($process.ExitCode))." -ForegroundColor Yellow
     }
 }
+
+Write-Host "--- Provisionamento concluído com sucesso! ---" -ForegroundColor Green
