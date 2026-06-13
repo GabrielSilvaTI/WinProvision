@@ -3,15 +3,19 @@
     Personalização do sistema WinProvision.
     Aplica tema escuro e wallpaper de forma persistente.
 
+.DESCRIPTION
+    Compatível com FirstLogon (sessão interativa do usuário).
+    Utiliza API nativa SystemParametersInfo para aplicar wallpaper sem reiniciar o Explorer.
+    Notifica o shell via WM_SETTINGCHANGE para aplicar mudanças em tempo real.
+
 .PARAMETER WallpaperPath
     Caminho do wallpaper a aplicar.
     Fallback automático para imagens padrão do Windows se não encontrado.
 
 .NOTES
-    Versão : 1.0.0
+    Versão : 1.1.0 (Enhanced Edition)
     Requer : PowerShell 5.1+ / Windows 10 1809+
     Contexto: Funciona em sessão de usuário interativa (não SYSTEM).
-              Para FirstLogon, agende para rodar na primeira sessão do usuário.
 #>
 
 param(
@@ -19,8 +23,9 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+$ProgressPreference    = "SilentlyContinue"
 
-$Script:Version   = "1.0.0"
+$Script:Version   = "1.1.0"
 $Script:StartTime = Get-Date
 $Script:LogDir    = "$env:SystemRoot\Logs\CloudProvisioning"
 $Script:LogFile   = "$Script:LogDir\Personalization_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -30,7 +35,7 @@ if (-not (Test-Path $Script:LogDir)) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LOGGING
+# LOGGING APRIMORADO COM ÍCONES E CORES
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Write-Log {
@@ -39,12 +44,21 @@ function Write-Log {
         [ValidateSet("INFO","WARN","ERROR","OK","STEP")][string]$Level = "INFO"
     )
     $ts     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $icon   = switch ($Level) {
+        "OK"    { "✔️" }
+        "WARN"  { "⚠️" }
+        "ERROR" { "❌" }
+        "STEP"  { "▶"  }
+        default { "ℹ"  }
+    }
     $prefix = switch ($Level) {
-        "OK"    { "[  OK  ]" } "WARN"  { "[ WARN ]" }
-        "ERROR" { "[ERROR ]" } "STEP"  { "[ STEP ]" }
+        "OK"    { "[  OK  ]" }
+        "WARN"  { "[ WARN ]" }
+        "ERROR" { "[ERROR ]" }
+        "STEP"  { "[ STEP ]" }
         default { "[ INFO ]" }
     }
-    $line = "$ts $prefix $Msg"
+    $line = "$ts $prefix $icon $Msg"
     try { Add-Content -Path $Script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
     $color = switch ($Level) {
         "OK"    { "Green"  } "WARN"  { "Yellow" }
@@ -52,6 +66,32 @@ function Write-Log {
         default { "Gray"   }
     }
     Write-Host $line -ForegroundColor $color
+}
+
+function Write-Header {
+    Clear-Host
+    Write-Host @"
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                  WINPROVISION PERSONALIZATION v$($Script:Version)                    ║
+║                         Enterprise Edition                                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+"@ -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  👤 Usuário    : $env:USERNAME" -ForegroundColor White
+    Write-Host "  🖥️  Computador : $env:COMPUTERNAME" -ForegroundColor White
+    Write-Host "  🎨 Tema       : Escuro" -ForegroundColor White
+    Write-Host "  🖼️  Wallpaper  : $(Split-Path $WallpaperPath -Leaf)" -ForegroundColor White
+    Write-Host "  📄 Log        : $Script:LogFile" -ForegroundColor White
+    Write-Host ""
+}
+
+function Write-Banner {
+    param([string]$Text)
+    $sep = "═" * 62
+    Write-Host "`n╔$sep╗" -ForegroundColor Magenta
+    Write-Host "║  $Text".PadRight(63) -ForegroundColor Cyan
+    Write-Host "╚$sep╝" -ForegroundColor Magenta
+    Write-Log $Text "STEP"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -94,11 +134,12 @@ if (-not ([System.Management.Automation.PSTypeName]"WinProvision.User32").Type) 
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 1 — TEMA ESCURO
+# ETAPA 1 — TEMA ESCURO (COM BARRA DE PROGRESSO)
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Set-DarkTheme {
-    Write-Log "Aplicando tema escuro..." "STEP"
+    Write-Banner "ETAPA 1/3 — APLICANDO TEMA ESCURO"
+    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando tema escuro" -PercentComplete 10
 
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
@@ -120,7 +161,10 @@ function Set-DarkTheme {
     }
 
     $allOk = $true
+    $step = 0
     foreach ($entry in $values.GetEnumerator()) {
+        $step++
+        Write-Progress -Activity "🎨 Personalização" -Status "Configurando $($entry.Key)" -PercentComplete (10 + ($step * 5))
         try {
             Set-ItemProperty -Path $regPath -Name $entry.Key -Value $entry.Value `
                 -Type DWord -ErrorAction Stop
@@ -133,17 +177,21 @@ function Set-DarkTheme {
 
     if ($allOk) {
         Write-Log "Tema escuro aplicado." "OK"
+        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro OK" -PercentComplete 30
+    } else {
+        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro com falhas parciais" -PercentComplete 30
     }
     return $allOk
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 2 — WALLPAPER
+# ETAPA 2 — WALLPAPER (COM BARRA DE PROGRESSO)
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Set-Wallpaper {
     param([string]$Path)
-    Write-Log "Aplicando wallpaper..." "STEP"
+    Write-Banner "ETAPA 2/3 — APLICANDO WALLPAPER"
+    Write-Progress -Activity "🎨 Personalização" -Status "Procurando wallpaper" -PercentComplete 35
 
     # Cadeia de fallback — procura o wallpaper pedido, depois alternativas
     $candidates = @(
@@ -159,11 +207,13 @@ function Set-Wallpaper {
             $resolved = $candidate
             break
         }
+        Write-Progress -Activity "🎨 Personalização" -Status "Testando: $(Split-Path $candidate -Leaf)" -PercentComplete 40
     }
 
     if (-not $resolved) {
         Write-Log "Nenhum wallpaper encontrado nos caminhos testados." "WARN"
         $candidates | ForEach-Object { Write-Log "  Testado: $_" "INFO" }
+        Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper não encontrado" -PercentComplete 50
         return $false
     }
 
@@ -172,6 +222,8 @@ function Set-Wallpaper {
     } else {
         Write-Log "Wallpaper: $resolved" "INFO"
     }
+
+    Write-Progress -Activity "🎨 Personalização" -Status "Configurando registro" -PercentComplete 50
 
     # Persiste o caminho no registro (garante que sobrevive a logoff/logon)
     try {
@@ -185,13 +237,15 @@ function Set-Wallpaper {
     }
 
     # Aplica imediatamente via API nativa
-    # SPIF_UPDATEINIFILE (1) | SPIF_SENDCHANGE (2) = 3
+    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando wallpaper via API" -PercentComplete 60
     $result = [WinProvision.User32]::SystemParametersInfo(20, 0, $resolved, 3)
     if ($result) {
         Write-Log "Wallpaper aplicado com sucesso: $(Split-Path $resolved -Leaf)" "OK"
+        Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper aplicado" -PercentComplete 70
     } else {
         $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
         Write-Log "SystemParametersInfo falhou (Win32 erro: $err)." "WARN"
+        Write-Progress -Activity "🎨 Personalização" -Status "Falha ao aplicar wallpaper" -PercentComplete 70
         return $false
     }
 
@@ -203,7 +257,8 @@ function Set-Wallpaper {
 # ══════════════════════════════════════════════════════════════════════════════
 
 function Update-Shell {
-    Write-Log "Notificando shell sobre alterações..." "STEP"
+    Write-Banner "ETAPA 3/3 — NOTIFICANDO SHELL"
+    Write-Progress -Activity "🎨 Personalização" -Status "Notificando Explorer" -PercentComplete 80
 
     # Envia WM_SETTINGCHANGE (0x001A) para HWND_BROADCAST (0xFFFF)
     # Isso faz o Explorer recarregar as configurações de tema e wallpaper
@@ -213,6 +268,7 @@ function Update-Shell {
     $SMTO_ABORTIFHUNG = 0x0002
     $result           = [UIntPtr]::Zero
 
+    Write-Progress -Activity "🎨 Personalização" -Status "Enviando WM_SETTINGCHANGE (tema)" -PercentComplete 85
     [WinProvision.User32]::SendMessageTimeout(
         $HWND_BROADCAST,
         $WM_SETTINGCHANGE,
@@ -223,6 +279,7 @@ function Update-Shell {
         [ref]$result
     ) | Out-Null
 
+    Write-Progress -Activity "🎨 Personalização" -Status "Enviando WM_SETTINGCHANGE (wallpaper)" -PercentComplete 90
     # Segunda notificação para mudança de wallpaper/desktop
     [WinProvision.User32]::SendMessageTimeout(
         $HWND_BROADCAST,
@@ -236,25 +293,53 @@ function Update-Shell {
 
     Write-Log "Shell notificado. Tema e wallpaper devem refletir imediatamente." "OK"
     Write-Log "Se o tema não aplicar visualmente, um logoff/logon completa a mudança." "INFO"
+    Write-Progress -Activity "🎨 Personalização" -Status "Concluído!" -PercentComplete 100
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# EXECUÇÃO PRINCIPAL
+# EXECUÇÃO PRINCIPAL (COM CABEÇALHO E RESUMO FINAL)
 # ══════════════════════════════════════════════════════════════════════════════
+
+Write-Header
 
 Write-Log "════════════════════════════════════════════════"
 Write-Log " WinProvision Personalization  v$Script:Version"
+Write-Log " Início   : $($Script:StartTime.ToString('dd/MM/yyyy HH:mm:ss'))"
 Write-Log " Usuário  : $env:USERNAME"
-Write-Log " Log      : $Script:LogFile"
 Write-Log "════════════════════════════════════════════════"
 
-Set-DarkTheme
-Set-Wallpaper -Path $WallpaperPath
+$themeOk = Set-DarkTheme
+$wallpaperOk = Set-Wallpaper -Path $WallpaperPath
 Update-Shell
 
 $duration = ((Get-Date) - $Script:StartTime).ToString("mm\:ss")
+
+# Resumo final estilizado
+Write-Host "`n╔══════════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "║                              RESUMO FINAL                                     ║" -ForegroundColor Cyan
+Write-Host "╚══════════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Log "════════════════════════════════════════════════"
-Write-Log " Personalização concluída em $duration."
+Write-Log " Tempo total : $duration min"
+Write-Log " Tema escuro : $(if ($themeOk) { 'Aplicado' } else { 'Falha' })"
+Write-Log " Wallpaper   : $(if ($wallpaperOk) { 'Aplicado' } else { 'Falha' })"
+Write-Log " Log completo: $Script:LogFile"
 Write-Log "════════════════════════════════════════════════"
 
-exit 0
+if ($themeOk -and $wallpaperOk) {
+    Write-Host "`n✅ Personalização concluída com sucesso!" -ForegroundColor Green
+} else {
+    Write-Host "`n⚠️ Personalização concluída com falhas parciais. Verifique o log." -ForegroundColor Yellow
+}
+
+Write-Host "`n⏱️  Aguardando 3 segundos antes de fechar...`n" -ForegroundColor Gray
+Start-Sleep -Seconds 3
+
+# Força o fechamento imediato (funciona em contexto de usuário também)
+try {
+    [Console]::SetIn([System.IO.StreamReader]::Null)
+    $Host.UI.RawUI.FlushInputBuffer()
+    [Environment]::Exit(0)
+}
+catch {
+    Stop-Process -Id $pid -Force
+}
