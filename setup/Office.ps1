@@ -47,15 +47,8 @@ $Script:LogDir    = "$env:SystemRoot\Logs\CloudProvisioning"
 $Script:LogFile   = "$Script:LogDir\Office_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
 $Script:Deadline  = $Script:StartTime.AddMinutes($MaxInstallMinutes + 15)
 
-# ── Cadeia de fontes ──────────────────────────────────────────────────────────
+# ── Cadeia de fontes (exclusivamente via GitHub) ──────────────────────────────
 $Script:OtpSources = @(
-    @{
-        type    = "zip"
-        label   = "Cloudflare R2 (ZIP privado)"
-        url     = "https://github.com/GabrielSilvaTI/WinProvision/releases/download/v1.0.0/Office.Tool.zip"
-        zipFile = "$Script:WorkDir\OTP_R2.zip"
-        extDir  = "$Script:WorkDir\OTP_R2"
-    },
     @{
         type    = "zip"
         label   = "GitHub Releases v11.5.7.0 com runtime (URL fixa)"
@@ -469,7 +462,7 @@ function Remove-WorkDir {
 Write-Log "════════════════════════════════════════════════"
 Write-Log " Office Provisioning via OTP  v$Script:Version"
 Write-Log " Início   : $($Script:StartTime.ToString('dd/MM/yyyy HH:mm:ss'))"
-Write-Log " Fontes   : $($Script:OtpSources.Count) disponíveis (com fallback)"
+Write-Log " Fontes   : $($Script:OtpSources.Count) disponíveis (com fallback via GitHub)"
 Write-Log " WorkDir  : $Script:WorkDir"
 Write-Log " Log      : $Script:LogFile"
 Write-Log "════════════════════════════════════════════════"
