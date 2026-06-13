@@ -1,4 +1,6 @@
-# URL base do seu repositório
+# WinProvision Orquestrador Master
+# Ordem: Tema > Bootstrap > Office > MAS
+
 $BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup"
 
 $Scripts = @(
@@ -9,6 +11,10 @@ $Scripts = @(
 )
 
 foreach ($Script in $Scripts) {
-    Write-Host "Executando: $Script" -ForegroundColor Cyan
-    irm $Script | iex
+    Write-Host "Iniciando processo: $Script" -ForegroundColor Cyan
+    try {
+        Invoke-RestMethod -Uri $Script | Invoke-Expression
+    } catch {
+        Write-Host "Falha ao executar $Script : $_" -ForegroundColor Red
+    }
 }
