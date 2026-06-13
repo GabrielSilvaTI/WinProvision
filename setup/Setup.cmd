@@ -3,7 +3,7 @@ title WinProvision Orchestrator
 set LOGFILE=C:\Windows\Temp\WinProvision_Log.txt
 
 echo [%DATE% %TIME%] Iniciando orquestrador >> "%LOGFILE%"
-echo Executando na ordem: Theme, Bootstrap, Office, MAS >> "%LOGFILE%"
+echo Executando na ordem: Theme, Bootstrap, Office >> "%LOGFILE%"
 
 :: Theme
 echo [%DATE% %TIME%] Executando Theme.ps1... >> "%LOGFILE%"
@@ -30,15 +30,6 @@ if %errorlevel% neq 0 (
     echo [%DATE% %TIME%] ERRO no Office (codigo: %errorlevel%) >> "%LOGFILE%"
 ) else (
     echo [%DATE% %TIME%] Office concluido >> "%LOGFILE%"
-)
-
-:: MAS
-echo [%DATE% %TIME%] Executando MAS.ps1... >> "%LOGFILE%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/MAS.ps1' | iex"
-if %errorlevel% neq 0 (
-    echo [%DATE% %TIME%] ERRO no MAS (codigo: %errorlevel%) >> "%LOGFILE%"
-) else (
-    echo [%DATE% %TIME%] MAS concluido >> "%LOGFILE%"
 )
 
 echo [%DATE% %TIME%] Orquestrador finalizado >> "%LOGFILE%"
