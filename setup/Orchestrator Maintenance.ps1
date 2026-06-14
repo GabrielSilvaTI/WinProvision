@@ -22,7 +22,7 @@
     Pula as otimizações de sistema.
 
 .NOTES
-    Versão : 5.6.0 (Stable + Otimizações + Winget robusto + EventLog)
+    Versão : 5.6.1 (Fechamento garantido com Stop-Process)
     Requer : PowerShell 5.1+ / Administrador
 #>
 
@@ -52,7 +52,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 # AMBIENTE
 # ══════════════════════════════════════════════════════════════════════════════
 
-$Script:Version   = "5.6.0"
+$Script:Version   = "5.6.1"
 $Script:StartTime = Get-Date
 $Script:LogDir    = "$env:SystemRoot\Logs\CloudProvisioning"
 $Script:LogFile   = "$Script:LogDir\Maintenance_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -575,12 +575,8 @@ if ($exitCode -eq 0) {
     Write-Host "`n⚠️ Manutenção concluída com $($Script:Counters.ERROR) erro(s). Verifique o log." -ForegroundColor Yellow
 }
 
-Write-Host "`n⏱️  Aguardando 3 segundos antes de fechar...`n" -ForegroundColor Gray
-Start-Sleep -Seconds 3
-try {
-    [Console]::SetIn([System.IO.StreamReader]::Null)
-    $Host.UI.RawUI.FlushInputBuffer()
-    [Environment]::Exit($exitCode)
-} catch {
-    Stop-Process -Id $pid -Force
-}
+Write-Host "`n⏱️  Aguardando 2 segundos antes de fechar...`n" -ForegroundColor Gray
+Start-Sleep -Seconds 2
+
+# Força o término imediato do processo PowerShell (fecha a janela)
+Stop-Process -Id $pid -Force
