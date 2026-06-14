@@ -19,6 +19,10 @@ Theme:
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; irm 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/theme.ps1' | iex"
 
+Orchestrator Maintenance:
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $url='https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/setup/Orchestrator%20Maintenance.ps1'; $script = Invoke-RestMethod -Uri $url -UseBasicParsing; $script = $script -replace '✔️','[OK]' -replace '⚠️','[WARN]' -replace '❌','[ERROR]' -replace '▶','[STEP]' -replace 'ℹ','[INFO]'; $tempFile = [System.IO.Path]::GetTempFileName() + '.ps1'; [System.IO.File]::WriteAllText($tempFile, $script, [System.Text.Encoding]::UTF8); Unblock-File -Path $tempFile; & $tempFile; Remove-Item $tempFile }"
+
 Unattend:
 
 https://schneegans.de/windows/unattend-generator/
