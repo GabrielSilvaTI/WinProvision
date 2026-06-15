@@ -2,66 +2,56 @@
 .SYNOPSIS
     Personalização do sistema WinProvision.
     Aplica tema escuro e wallpaper (baixado do GitHub) de forma persistente.
-
 .DESCRIPTION
     Compatível com FirstLogon (sessão interativa do usuário).
     Utiliza API nativa SystemParametersInfo para aplicar wallpaper sem reiniciar o Explorer.
     Notifica o shell via WM_SETTINGCHANGE.
     Ao final, reinicia o Explorer para garantir que todas as alterações sejam aplicadas.
-
-.PARAMETER WallpaperUrl
-    URL do wallpaper a ser baixado (raw do GitHub).
-
-.PARAMETER WallpaperFallback
-    Caminho do wallpaper fallback caso o download falhe.
-
 .NOTES
-    Versão : 1.3.0 (com restart do Explorer)
+    Versão : 2.1.0 (correções: repasse de parâmetros na elevação, encerramento seguro,
+                     guard do Add-Type, tratamento de erro no OEM sem exit abrupto)
     Requer : PowerShell 5.1+ / Windows 10 1809+
     Contexto: Funciona em sessão de usuário interativa (não SYSTEM).
 #>
 
 param(
-    [string]$WallpaperUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/main/assets/Wallpaper%20OEM.png",
+    [string]$WallpaperUrl      = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/main/assets/Wallpaper%20OEM.png",
     [string]$WallpaperFallback = "C:\Windows\Web\Wallpaper\Windows\img19.jpg"
 )
 
 $ErrorActionPreference = "Continue"
 $ProgressPreference    = "SilentlyContinue"
 
-$Script:Version   = "1.3.0"
-$Script:StartTime = Get-Date
-$Script:LogDir    = "$env:SystemRoot\Logs\CloudProvisioning"
-$Script:LogFile   = "$Script:LogDir\Personalization_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-$Script:DownloadDir = "$env:TEMP\WinProvision"
-$Script:LocalWallpaper = "$Script:DownloadDir\Wallpaper_OEM.png"
+# ── Inicialização de variáveis de escopo de script ─────────────────────────────
+function Initialize-Environment {
+    $Script:Version          = "2.1.0"
+    $Script:StartTime        = Get-Date
+    $Script:LogDir           = "$env:SystemRoot\Logs\CloudProvisioning"
+    $Script:LogFile          = "$Script:LogDir\Personalization_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    $Script:DownloadDir      = "$env:TEMP\WinProvision"
+    $Script:LocalWallpaper   = "$Script:DownloadDir\Wallpaper_OEM.png"
+    $Script:OEMWallpaperPath = "C:\Windows\Web\Wallpaper\OEM\Wallpaper_OEM.png"
 
-if (-not (Test-Path $Script:LogDir)) {
-    New-Item -ItemType Directory -Path $Script:LogDir -Force | Out-Null
+    if (-not (Test-Path $Script:LogDir)) {
+        New-Item -ItemType Directory -Path $Script:LogDir -Force | Out-Null
+    }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# LOGGING APRIMORADO
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ── Logging ────────────────────────────────────────────────────────────────────
 function Write-Log {
     param(
         [string]$Msg,
         [ValidateSet("INFO","WARN","ERROR","OK","STEP")][string]$Level = "INFO"
     )
-    $ts     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $icon   = switch ($Level) {
-        "OK"    { "✔️" }
-        "WARN"  { "⚠️" }
-        "ERROR" { "❌" }
-        "STEP"  { "▶"  }
+    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $icon = switch ($Level) {
+        "OK"    { "✔️" } "WARN"  { "⚠️" }
+        "ERROR" { "❌" } "STEP"  { "▶"  }
         default { "ℹ"  }
     }
     $prefix = switch ($Level) {
-        "OK"    { "[  OK  ]" }
-        "WARN"  { "[ WARN ]" }
-        "ERROR" { "[ERROR ]" }
-        "STEP"  { "[ STEP ]" }
+        "OK"    { "[  OK  ]" } "WARN"  { "[ WARN ]" }
+        "ERROR" { "[ERROR ]" } "STEP"  { "[ STEP ]" }
         default { "[ INFO ]" }
     }
     $line = "$ts $prefix $icon $Msg"
@@ -83,12 +73,12 @@ function Write-Header {
 ╚══════════════════════════════════════════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  👤 Usuário    : $env:USERNAME" -ForegroundColor White
+    Write-Host "  👤 Usuário    : $env:USERNAME"    -ForegroundColor White
     Write-Host "  🖥️  Computador : $env:COMPUTERNAME" -ForegroundColor White
-    Write-Host "  🎨 Tema       : Escuro" -ForegroundColor White
+    Write-Host "  🎨 Tema       : Escuro"            -ForegroundColor White
     Write-Host "  🖼️  Wallpaper  : OEM (baixado do GitHub)" -ForegroundColor White
     Write-Host "  🔄 Explorer   : Será reiniciado ao final" -ForegroundColor White
-    Write-Host "  📄 Log        : $Script:LogFile" -ForegroundColor White
+    Write-Host "  📄 Log        : $Script:LogFile"  -ForegroundColor White
     Write-Host ""
 }
 
@@ -96,30 +86,112 @@ function Write-Banner {
     param([string]$Text)
     $sep = "═" * 62
     Write-Host "`n╔$sep╗" -ForegroundColor Magenta
-    Write-Host "║  $Text".PadRight(63) -ForegroundColor Cyan
+    Write-Host ("║  " + $Text).PadRight(63) + "║" -ForegroundColor Cyan
     Write-Host "╚$sep╝" -ForegroundColor Magenta
     Write-Log $Text "STEP"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# DOWNLOAD DO WALLPAPER
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Elevação — repassa parâmetros customizados corretamente ────────────────────
+function Test-IsAdmin {
+    $identity  = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
-function Download-Wallpaper {
-    Write-Banner "ETAPA 0 — BAIXANDO WALLPAPER DO GITHUB"
-    Write-Progress -Activity "🎨 Personalização" -Status "Baixando wallpaper OEM" -PercentComplete 5
+function Request-Admin {
+    if (-not (Test-IsAdmin)) {
+        Write-Host "🔐 Este script precisa de privilégios de administrador para persistir o wallpaper na pasta OEM." -ForegroundColor Yellow
+        Write-Host "⏳ Solicitando elevação..." -ForegroundColor Yellow
+
+        # Repassa parâmetros customizados para a sessão elevada
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
+                   + " -WallpaperUrl `"$WallpaperUrl`"" `
+                   + " -WallpaperFallback `"$WallpaperFallback`""
+
+        Start-Process PowerShell -ArgumentList $arguments -Verb RunAs
+        exit 0
+    }
+}
+
+# ── Registro de tipo nativo (Add-Type com guard seguro) ───────────────────────
+function Register-User32Type {
+    # Evita redefinição em sessões que já carregaram o tipo (ex: re-dot-source)
+    if (-not ([System.Management.Automation.PSTypeName]"WinProvision.User32").Type) {
+        try {
+            Add-Type -TypeDefinition @"
+                using System;
+                using System.Runtime.InteropServices;
+                namespace WinProvision {
+                    public class User32 {
+                        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+                        public static extern bool SystemParametersInfo(
+                            uint uiAction,
+                            uint uiParam,
+                            string pvParam,
+                            uint fWinIni
+                        );
+
+                        [DllImport("user32.dll", SetLastError = true)]
+                        public static extern IntPtr SendMessageTimeout(
+                            IntPtr hWnd,
+                            uint Msg,
+                            UIntPtr wParam,
+                            string lParam,
+                            uint fuFlags,
+                            uint uTimeout,
+                            out UIntPtr lpdwResult
+                        );
+                    }
+                }
+"@ -ErrorAction Stop
+            Write-Log "Tipo WinProvision.User32 registrado." "INFO"
+        } catch {
+            Write-Log "Falha ao registrar tipo User32: $_" "ERROR"
+            throw   # encerra o script com erro claro em vez de falhar silenciosamente
+        }
+    }
+}
+
+# ── Etapas ─────────────────────────────────────────────────────────────────────
+function Prepare-OEMFolder {
+    Write-Banner "PREPARANDO PASTA OEM"
+    Write-Progress -Activity "🎨 Personalização" -Status "Criando diretório OEM" -PercentComplete 1
+
+    $oemDir = Split-Path $Script:OEMWallpaperPath -Parent
+    if (-not (Test-Path $oemDir)) {
+        try {
+            New-Item -ItemType Directory -Path $oemDir -Force | Out-Null
+            Write-Log "Pasta OEM criada: $oemDir" "OK"
+        } catch {
+            # Retorna $false em vez de usar exit abruptamente dentro de uma função
+            Write-Log "Falha ao criar pasta OEM: $_" "ERROR"
+            Write-Progress -Activity "🎨 Personalização" -Status "Erro ao criar OEM" -PercentComplete 1
+            return $false
+        }
+    } else {
+        Write-Log "Pasta OEM já existe." "INFO"
+    }
+
+    Write-Progress -Activity "🎨 Personalização" -Status "Pasta OEM pronta" -PercentComplete 5
+    return $true
+}
+
+function Get-Wallpaper {
+    Write-Banner "ETAPA 1/5 — BAIXANDO WALLPAPER DO GITHUB"
+    Write-Progress -Activity "🎨 Personalização" -Status "Baixando wallpaper" -PercentComplete 10
 
     if (-not (Test-Path $Script:DownloadDir)) {
         New-Item -ItemType Directory -Path $Script:DownloadDir -Force | Out-Null
     }
 
     try {
-        Write-Log "Baixando wallpaper de: $WallpaperUrl" "INFO"
+        Write-Log "Baixando de: $WallpaperUrl" "INFO"
         Invoke-WebRequest -Uri $WallpaperUrl -OutFile $Script:LocalWallpaper -UseBasicParsing -ErrorAction Stop
+
         if (Test-Path $Script:LocalWallpaper) {
             $size = (Get-Item $Script:LocalWallpaper).Length
             Write-Log "Download concluído: $([Math]::Round($size/1KB,1)) KB" "OK"
-            Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper baixado" -PercentComplete 15
+            Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper baixado" -PercentComplete 20
             return $true
         } else {
             throw "Arquivo não encontrado após download."
@@ -127,51 +199,35 @@ function Download-Wallpaper {
     } catch {
         Write-Log "Falha no download: $_" "ERROR"
         Write-Log "Usando wallpaper fallback: $WallpaperFallback" "WARN"
-        Write-Progress -Activity "🎨 Personalização" -Status "Usando fallback" -PercentComplete 15
+        Write-Progress -Activity "🎨 Personalização" -Status "Usando fallback" -PercentComplete 20
         return $false
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ASSINATURA NATIVA: SystemParametersInfo
-# ══════════════════════════════════════════════════════════════════════════════
+function Install-WallpaperToOEM {
+    Write-Banner "ETAPA 2/5 — COPIANDO PARA PASTA OEM"
+    Write-Progress -Activity "🎨 Personalização" -Status "Copiando wallpaper para OEM" -PercentComplete 25
 
-if (-not ([System.Management.Automation.PSTypeName]"WinProvision.User32").Type) {
-    Add-Type -TypeDefinition @"
-        using System;
-        using System.Runtime.InteropServices;
-        namespace WinProvision {
-            public class User32 {
-                [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-                public static extern bool SystemParametersInfo(
-                    uint uiAction,
-                    uint uiParam,
-                    string pvParam,
-                    uint fWinIni
-                );
+    if (-not (Test-Path $Script:LocalWallpaper)) {
+        Write-Log "Arquivo temporário não encontrado." "ERROR"
+        return $false
+    }
 
-                [DllImport("user32.dll", SetLastError = true)]
-                public static extern IntPtr SendMessageTimeout(
-                    IntPtr hWnd,
-                    uint Msg,
-                    UIntPtr wParam,
-                    string lParam,
-                    uint fuFlags,
-                    uint uTimeout,
-                    out UIntPtr lpdwResult
-                );
-            }
-        }
-"@ -ErrorAction Stop
+    try {
+        Copy-Item -Path $Script:LocalWallpaper -Destination $Script:OEMWallpaperPath -Force -ErrorAction Stop
+        Write-Log "Wallpaper copiado para $Script:OEMWallpaperPath" "OK"
+        Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper em OEM" -PercentComplete 30
+        return $true
+    } catch {
+        Write-Log "Falha ao copiar para OEM: $_" "ERROR"
+        Write-Progress -Activity "🎨 Personalização" -Status "Falha na cópia OEM" -PercentComplete 30
+        return $false
+    }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 1 — TEMA ESCURO
-# ══════════════════════════════════════════════════════════════════════════════
-
 function Set-DarkTheme {
-    Write-Banner "ETAPA 1/4 — APLICANDO TEMA ESCURO"
-    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando tema escuro" -PercentComplete 20
+    Write-Banner "ETAPA 3/5 — APLICANDO TEMA ESCURO"
+    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando tema escuro" -PercentComplete 35
 
     $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
 
@@ -192,10 +248,10 @@ function Set-DarkTheme {
     }
 
     $allOk = $true
-    $step = 0
+    $step  = 0
     foreach ($entry in $values.GetEnumerator()) {
         $step++
-        Write-Progress -Activity "🎨 Personalização" -Status "Configurando $($entry.Key)" -PercentComplete (20 + ($step * 3))
+        Write-Progress -Activity "🎨 Personalização" -Status "Configurando $($entry.Key)" -PercentComplete (35 + ($step * 3))
         try {
             Set-ItemProperty -Path $regPath -Name $entry.Key -Value $entry.Value -Type DWord -ErrorAction Stop
             Write-Log "  $($entry.Key) = $($entry.Value)" "INFO"
@@ -207,21 +263,17 @@ function Set-DarkTheme {
 
     if ($allOk) {
         Write-Log "Tema escuro aplicado." "OK"
-        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro OK" -PercentComplete 35
+        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro OK" -PercentComplete 45
     } else {
-        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro com falhas parciais" -PercentComplete 35
+        Write-Progress -Activity "🎨 Personalização" -Status "Tema escuro com falhas" -PercentComplete 45
     }
     return $allOk
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 2 — WALLPAPER (COM FALLBACK)
-# ══════════════════════════════════════════════════════════════════════════════
-
 function Set-Wallpaper {
     param([string]$WallpaperFile)
-    Write-Banner "ETAPA 2/4 — APLICANDO WALLPAPER"
-    Write-Progress -Activity "🎨 Personalização" -Status "Preparando wallpaper" -PercentComplete 40
+    Write-Banner "ETAPA 4/5 — APLICANDO WALLPAPER"
+    Write-Progress -Activity "🎨 Personalização" -Status "Preparando wallpaper" -PercentComplete 50
 
     if (-not (Test-Path $WallpaperFile)) {
         Write-Log "Wallpaper não encontrado: $WallpaperFile" "WARN"
@@ -230,16 +282,10 @@ function Set-Wallpaper {
             "C:\Windows\Web\Wallpaper\Windows\img19.jpg",
             "C:\Windows\Web\Wallpaper\Theme1\img1.jpg"
         )
-        $resolved = $null
-        foreach ($candidate in $candidates) {
-            if (Test-Path $candidate) {
-                $resolved = $candidate
-                break
-            }
-        }
+        $resolved = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
         if (-not $resolved) {
             Write-Log "Nenhum wallpaper fallback encontrado." "ERROR"
-            Write-Progress -Activity "🎨 Personalização" -Status "Falha total no wallpaper" -PercentComplete 50
+            Write-Progress -Activity "🎨 Personalização" -Status "Falha total no wallpaper" -PercentComplete 60
             return $false
         }
         Write-Log "Usando fallback: $resolved" "WARN"
@@ -248,7 +294,7 @@ function Set-Wallpaper {
         Write-Log "Wallpaper: $WallpaperFile" "INFO"
     }
 
-    Write-Progress -Activity "🎨 Personalização" -Status "Configurando registro" -PercentComplete 50
+    Write-Progress -Activity "🎨 Personalização" -Status "Configurando registro" -PercentComplete 65
     try {
         $regDesktop = "HKCU:\Control Panel\Desktop"
         Set-ItemProperty -Path $regDesktop -Name "Wallpaper"      -Value $WallpaperFile -ErrorAction Stop
@@ -259,64 +305,46 @@ function Set-Wallpaper {
         Write-Log "Aviso ao persistir no registro: $_" "WARN"
     }
 
-    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando via API" -PercentComplete 60
+    Write-Progress -Activity "🎨 Personalização" -Status "Aplicando via API" -PercentComplete 70
     $result = [WinProvision.User32]::SystemParametersInfo(20, 0, $WallpaperFile, 3)
     if ($result) {
         Write-Log "Wallpaper aplicado com sucesso: $(Split-Path $WallpaperFile -Leaf)" "OK"
-        Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper aplicado" -PercentComplete 70
+        Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper aplicado" -PercentComplete 80
         return $true
     } else {
         $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
         Write-Log "SystemParametersInfo falhou (Win32 erro: $err)." "WARN"
-        Write-Progress -Activity "🎨 Personalização" -Status "Falha na aplicação" -PercentComplete 70
+        Write-Progress -Activity "🎨 Personalização" -Status "Falha na aplicação" -PercentComplete 80
         return $false
     }
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 3 — NOTIFICAÇÃO DO SHELL
-# ══════════════════════════════════════════════════════════════════════════════
-
 function Update-Shell {
-    Write-Banner "ETAPA 3/4 — NOTIFICANDO SHELL"
-    Write-Progress -Activity "🎨 Personalização" -Status "Notificando Explorer" -PercentComplete 80
+    Write-Banner "NOTIFICANDO SHELL"
+    Write-Progress -Activity "🎨 Personalização" -Status "Notificando Explorer" -PercentComplete 85
 
     $HWND_BROADCAST   = [IntPtr]0xFFFF
     $WM_SETTINGCHANGE = 0x001A
     $SMTO_ABORTIFHUNG = 0x0002
     $result           = [UIntPtr]::Zero
 
-    Write-Progress -Activity "🎨 Personalização" -Status "Enviando WM_SETTINGCHANGE (tema)" -PercentComplete 85
+    Write-Progress -Activity "🎨 Personalização" -Status "Enviando WM_SETTINGCHANGE (tema)" -PercentComplete 88
     [WinProvision.User32]::SendMessageTimeout(
-        $HWND_BROADCAST,
-        $WM_SETTINGCHANGE,
-        [UIntPtr]::Zero,
-        "ImmersiveColorSet",
-        $SMTO_ABORTIFHUNG,
-        2000,
-        [ref]$result
+        $HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero,
+        "ImmersiveColorSet", $SMTO_ABORTIFHUNG, 2000, [ref]$result
     ) | Out-Null
 
     Write-Progress -Activity "🎨 Personalização" -Status "Enviando WM_SETTINGCHANGE (wallpaper)" -PercentComplete 90
     [WinProvision.User32]::SendMessageTimeout(
-        $HWND_BROADCAST,
-        $WM_SETTINGCHANGE,
-        [UIntPtr]::Zero,
-        "Environment",
-        $SMTO_ABORTIFHUNG,
-        2000,
-        [ref]$result
+        $HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero,
+        "Environment", $SMTO_ABORTIFHUNG, 2000, [ref]$result
     ) | Out-Null
 
     Write-Log "Shell notificado." "OK"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ETAPA 4 — REINICIAR EXPLORER (GARANTE APLICAÇÃO TOTAL)
-# ══════════════════════════════════════════════════════════════════════════════
-
 function Restart-Explorer {
-    Write-Banner "ETAPA 4/4 — REINICIANDO EXPLORER"
+    Write-Banner "ETAPA 5/5 — REINICIANDO EXPLORER"
     Write-Progress -Activity "🎨 Personalização" -Status "Finalizando aplicação" -PercentComplete 95
 
     Write-Log "Encerrando o processo explorer.exe..." "STEP"
@@ -343,10 +371,20 @@ function Restart-Explorer {
     return $true
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# EXECUÇÃO PRINCIPAL
-# ══════════════════════════════════════════════════════════════════════════════
+# ── Encerramento seguro ────────────────────────────────────────────────────────
+function Exit-Script {
+    param([int]$Code = 0)
+    # Limpa o buffer de input sem depender de Console::SetIn (que falha em hosts não-interativos)
+    try { $Host.UI.RawUI.FlushInputBuffer() } catch { }
+    [Environment]::Exit($Code)
+}
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+Initialize-Environment
+Request-Admin           # eleva e repassa parâmetros; continua se já for admin
+Register-User32Type     # registra P/Invoke antes de qualquer uso
 Write-Header
 
 Write-Log "════════════════════════════════════════════════"
@@ -355,30 +393,35 @@ Write-Log " Início   : $($Script:StartTime.ToString('dd/MM/yyyy HH:mm:ss'))"
 Write-Log " Usuário  : $env:USERNAME"
 Write-Log "════════════════════════════════════════════════"
 
-$downloadOk = Download-Wallpaper
-if ($downloadOk) {
-    $wallpaperFile = $Script:LocalWallpaper
+$oemReady    = Prepare-OEMFolder
+$downloadOk  = Get-Wallpaper
+
+if ($downloadOk -and $oemReady) {
+    $copied = Install-WallpaperToOEM
+    $wallpaperFile = if ($copied) { $Script:OEMWallpaperPath } else {
+        Write-Log "Falha ao copiar para OEM, utilizando fallback." "WARN"
+        $WallpaperFallback
+    }
 } else {
     $wallpaperFile = $WallpaperFallback
 }
 
-$themeOk = Set-DarkTheme
-$wallpaperOk = Set-Wallpaper -WallpaperFile $wallpaperFile
+$themeOk           = Set-DarkTheme
+$wallpaperOk       = Set-Wallpaper -WallpaperFile $wallpaperFile
 Update-Shell
 $explorerRestarted = Restart-Explorer
 
 $duration = ((Get-Date) - $Script:StartTime).ToString("mm\:ss")
 
-# Resumo final
 Write-Host "`n╔══════════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║                              RESUMO FINAL                                     ║" -ForegroundColor Cyan
 Write-Host "╚══════════════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Log "════════════════════════════════════════════════"
-Write-Log " Tempo total       : $duration min"
-Write-Log " Tema escuro       : $(if ($themeOk) { 'Aplicado' } else { 'Falha' })"
-Write-Log " Wallpaper         : $(if ($wallpaperOk) { 'Aplicado' } else { 'Falha' })"
-Write-Log " Explorer reiniciado: $(if ($explorerRestarted) { 'Sim' } else { 'Não' })"
-Write-Log " Log completo      : $Script:LogFile"
+Write-Log " Tempo total        : $duration min"
+Write-Log " Tema escuro        : $(if ($themeOk)           { 'Aplicado' } else { 'Falha' })"
+Write-Log " Wallpaper          : $(if ($wallpaperOk)       { 'Aplicado' } else { 'Falha' })"
+Write-Log " Explorer reiniciado: $(if ($explorerRestarted) { 'Sim'      } else { 'Não'   })"
+Write-Log " Log completo       : $Script:LogFile"
 Write-Log "════════════════════════════════════════════════"
 
 if ($themeOk -and $wallpaperOk -and $explorerRestarted) {
@@ -391,13 +434,4 @@ if ($themeOk -and $wallpaperOk -and $explorerRestarted) {
 
 Write-Host "`n⏱️  Aguardando 3 segundos antes de fechar...`n" -ForegroundColor Gray
 Start-Sleep -Seconds 3
-
-# Força o fechamento imediato
-try {
-    [Console]::SetIn([System.IO.StreamReader]::Null)
-    $Host.UI.RawUI.FlushInputBuffer()
-    [Environment]::Exit(0)
-}
-catch {
-    Stop-Process -Id $pid -Force
-}
+Exit-Script -Code 0
