@@ -8,8 +8,10 @@
     Notifica o shell via WM_SETTINGCHANGE.
     Ao final, reinicia o Explorer para garantir que todas as alterações sejam aplicadas.
 .NOTES
-    Versão : 2.1.0 (correções: repasse de parâmetros na elevação, encerramento seguro,
-                     guard do Add-Type, tratamento de erro no OEM sem exit abrupto)
+    Versão : 2.2.0
+        - Download de wallpaper com 3 métodos resilientes (HttpWebRequest, BITS, WebClient)
+        - Set-DarkTheme com ordem de chaves garantida ([ordered])
+        - Restart-Explorer com verificação real de processo (sem sleep cego)
     Requer : PowerShell 5.1+ / Windows 10 1809+
     Contexto: Funciona em sessão de usuário interativa (não SYSTEM).
 #>
@@ -22,9 +24,9 @@ param(
 $ErrorActionPreference = "Continue"
 $ProgressPreference    = "SilentlyContinue"
 
-# ── Inicialização de variáveis de escopo de script ─────────────────────────────
+# ── Inicialização ──────────────────────────────────────────────────────────────
 function Initialize-Environment {
-    $Script:Version          = "2.1.0"
+    $Script:Version          = "2.2.0"
     $Script:StartTime        = Get-Date
     $Script:LogDir           = "$env:SystemRoot\Logs\CloudProvisioning"
     $Script:LogFile          = "$Script:LogDir\Personalization_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -43,8 +45,8 @@ function Write-Log {
         [string]$Msg,
         [ValidateSet("INFO","WARN","ERROR","OK","STEP")][string]$Level = "INFO"
     )
-    $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $icon = switch ($Level) {
+    $ts     = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $icon   = switch ($Level) {
         "OK"    { "✔️" } "WARN"  { "⚠️" }
         "ERROR" { "❌" } "STEP"  { "▶"  }
         default { "ℹ"  }
@@ -73,12 +75,12 @@ function Write-Header {
 ╚══════════════════════════════════════════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  👤 Usuário    : $env:USERNAME"    -ForegroundColor White
-    Write-Host "  🖥️  Computador : $env:COMPUTERNAME" -ForegroundColor White
-    Write-Host "  🎨 Tema       : Escuro"            -ForegroundColor White
-    Write-Host "  🖼️  Wallpaper  : OEM (baixado do GitHub)" -ForegroundColor White
-    Write-Host "  🔄 Explorer   : Será reiniciado ao final" -ForegroundColor White
-    Write-Host "  📄 Log        : $Script:LogFile"  -ForegroundColor White
+    Write-Host "  👤 Usuário    : $env:USERNAME"                    -ForegroundColor White
+    Write-Host "  🖥️  Computador : $env:COMPUTERNAME"               -ForegroundColor White
+    Write-Host "  🎨 Tema       : Escuro"                           -ForegroundColor White
+    Write-Host "  🖼️  Wallpaper  : OEM (baixado do GitHub)"         -ForegroundColor White
+    Write-Host "  🔄 Explorer   : Será reiniciado ao final"         -ForegroundColor White
+    Write-Host "  📄 Log        : $Script:LogFile"                  -ForegroundColor White
     Write-Host ""
 }
 
@@ -91,7 +93,7 @@ function Write-Banner {
     Write-Log $Text "STEP"
 }
 
-# ── Elevação — repassa parâmetros customizados corretamente ────────────────────
+# ── Elevação ───────────────────────────────────────────────────────────────────
 function Test-IsAdmin {
     $identity  = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
@@ -103,7 +105,6 @@ function Request-Admin {
         Write-Host "🔐 Este script precisa de privilégios de administrador para persistir o wallpaper na pasta OEM." -ForegroundColor Yellow
         Write-Host "⏳ Solicitando elevação..." -ForegroundColor Yellow
 
-        # Repassa parâmetros customizados para a sessão elevada
         $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" `
                    + " -WallpaperUrl `"$WallpaperUrl`"" `
                    + " -WallpaperFallback `"$WallpaperFallback`""
@@ -113,9 +114,8 @@ function Request-Admin {
     }
 }
 
-# ── Registro de tipo nativo (Add-Type com guard seguro) ───────────────────────
+# ── P/Invoke ───────────────────────────────────────────────────────────────────
 function Register-User32Type {
-    # Evita redefinição em sessões que já carregaram o tipo (ex: re-dot-source)
     if (-not ([System.Management.Automation.PSTypeName]"WinProvision.User32").Type) {
         try {
             Add-Type -TypeDefinition @"
@@ -130,7 +130,6 @@ function Register-User32Type {
                             string pvParam,
                             uint fWinIni
                         );
-
                         [DllImport("user32.dll", SetLastError = true)]
                         public static extern IntPtr SendMessageTimeout(
                             IntPtr hWnd,
@@ -147,7 +146,7 @@ function Register-User32Type {
             Write-Log "Tipo WinProvision.User32 registrado." "INFO"
         } catch {
             Write-Log "Falha ao registrar tipo User32: $_" "ERROR"
-            throw   # encerra o script com erro claro em vez de falhar silenciosamente
+            throw
         }
     }
 }
@@ -163,7 +162,6 @@ function Prepare-OEMFolder {
             New-Item -ItemType Directory -Path $oemDir -Force | Out-Null
             Write-Log "Pasta OEM criada: $oemDir" "OK"
         } catch {
-            # Retorna $false em vez de usar exit abruptamente dentro de uma função
             Write-Log "Falha ao criar pasta OEM: $_" "ERROR"
             Write-Progress -Activity "🎨 Personalização" -Status "Erro ao criar OEM" -PercentComplete 1
             return $false
@@ -183,25 +181,82 @@ function Get-Wallpaper {
     if (-not (Test-Path $Script:DownloadDir)) {
         New-Item -ItemType Directory -Path $Script:DownloadDir -Force | Out-Null
     }
+    if (Test-Path $Script:LocalWallpaper) {
+        Remove-Item $Script:LocalWallpaper -Force -ErrorAction SilentlyContinue
+    }
 
+    Write-Log "Baixando de: $WallpaperUrl" "INFO"
+
+    # Método A: HttpWebRequest (funciona em SYSTEM e sem proxy IE)
     try {
-        Write-Log "Baixando de: $WallpaperUrl" "INFO"
-        Invoke-WebRequest -Uri $WallpaperUrl -OutFile $Script:LocalWallpaper -UseBasicParsing -ErrorAction Stop
+        $req           = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($WallpaperUrl)
+        $req.Timeout   = 30000
+        $req.Method    = "GET"
+        $req.UserAgent = "WinProvision/2.2.0"
+        $resp          = $req.GetResponse()
+        $stream        = $resp.GetResponseStream()
+        $fs            = [System.IO.File]::Open($Script:LocalWallpaper,
+                             [System.IO.FileMode]::Create,
+                             [System.IO.FileAccess]::Write,
+                             [System.IO.FileShare]::None)
+        $buf = New-Object byte[] 65536
+        do {
+            $read = $stream.Read($buf, 0, $buf.Length)
+            if ($read -gt 0) { $fs.Write($buf, 0, $read) }
+        } while ($read -gt 0)
+        $fs.Flush(); $fs.Close()
+        $stream.Close(); $resp.Close()
 
-        if (Test-Path $Script:LocalWallpaper) {
-            $size = (Get-Item $Script:LocalWallpaper).Length
-            Write-Log "Download concluído: $([Math]::Round($size/1KB,1)) KB" "OK"
+        $size = (Get-Item $Script:LocalWallpaper -ErrorAction SilentlyContinue).Length
+        if ($size -gt 0) {
+            Write-Log "Download OK via HttpWebRequest ($([Math]::Round($size/1KB,1)) KB)." "OK"
             Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper baixado" -PercentComplete 20
             return $true
-        } else {
-            throw "Arquivo não encontrado após download."
+        }
+        throw "Arquivo vazio após download."
+    } catch {
+        Write-Log "HttpWebRequest falhou: $_" "WARN"
+        if (Test-Path $Script:LocalWallpaper) { Remove-Item $Script:LocalWallpaper -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Método B: BITS
+    try {
+        $bitsCmd = Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue
+        if ($bitsCmd) {
+            Start-BitsTransfer -Source $WallpaperUrl -Destination $Script:LocalWallpaper -Priority Foreground -ErrorAction Stop
+            $size = (Get-Item $Script:LocalWallpaper -ErrorAction SilentlyContinue).Length
+            if ($size -gt 0) {
+                Write-Log "Download OK via BITS ($([Math]::Round($size/1KB,1)) KB)." "OK"
+                Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper baixado" -PercentComplete 20
+                return $true
+            }
+            throw "BITS gerou arquivo vazio."
         }
     } catch {
-        Write-Log "Falha no download: $_" "ERROR"
-        Write-Log "Usando wallpaper fallback: $WallpaperFallback" "WARN"
-        Write-Progress -Activity "🎨 Personalização" -Status "Usando fallback" -PercentComplete 20
-        return $false
+        Write-Log "BITS falhou: $_" "WARN"
+        if (Test-Path $Script:LocalWallpaper) { Remove-Item $Script:LocalWallpaper -Force -ErrorAction SilentlyContinue }
     }
+
+    # Método C: WebClient
+    try {
+        $wc                       = New-Object System.Net.WebClient
+        $wc.Headers["User-Agent"] = "WinProvision/2.2.0"
+        $wc.DownloadFile($WallpaperUrl, $Script:LocalWallpaper)
+        $size = (Get-Item $Script:LocalWallpaper -ErrorAction SilentlyContinue).Length
+        if ($size -gt 0) {
+            Write-Log "Download OK via WebClient ($([Math]::Round($size/1KB,1)) KB)." "OK"
+            Write-Progress -Activity "🎨 Personalização" -Status "Wallpaper baixado" -PercentComplete 20
+            return $true
+        }
+        throw "WebClient gerou arquivo vazio."
+    } catch {
+        Write-Log "WebClient falhou: $_" "WARN"
+        if (Test-Path $Script:LocalWallpaper) { Remove-Item $Script:LocalWallpaper -Force -ErrorAction SilentlyContinue }
+    }
+
+    Write-Log "Todos os métodos de download falharam. Usando fallback." "ERROR"
+    Write-Progress -Activity "🎨 Personalização" -Status "Usando fallback" -PercentComplete 20
+    return $false
 }
 
 function Install-WallpaperToOEM {
@@ -241,7 +296,8 @@ function Set-DarkTheme {
         }
     }
 
-    $values = @{
+    # [ordered] garante ordem de iteração e progresso visual consistente
+    $values = [ordered]@{
         "AppsUseLightTheme"    = 0
         "SystemUsesLightTheme" = 0
         "EnableTransparency"   = 1
@@ -345,7 +401,7 @@ function Update-Shell {
 
 function Restart-Explorer {
     Write-Banner "ETAPA 5/5 — REINICIANDO EXPLORER"
-    Write-Progress -Activity "🎨 Personalização" -Status "Finalizando aplicação" -PercentComplete 95
+    Write-Progress -Activity "🎨 Personalização" -Status "Encerrando Explorer" -PercentComplete 92
 
     Write-Log "Encerrando o processo explorer.exe..." "STEP"
     try {
@@ -355,26 +411,44 @@ function Restart-Explorer {
         Write-Log "Não foi possível encerrar o Explorer (pode já estar parado): $_" "WARN"
     }
 
-    Start-Sleep -Seconds 2
+    # Aguarda o processo desaparecer antes de reiniciar (máx 5s)
+    $waited = 0
+    while ((Get-Process -Name "explorer" -ErrorAction SilentlyContinue) -and $waited -lt 10) {
+        Start-Sleep -Milliseconds 500
+        $waited++
+    }
+
+    Write-Progress -Activity "🎨 Personalização" -Status "Iniciando Explorer" -PercentComplete 95
     Write-Log "Iniciando um novo explorer.exe..." "STEP"
     try {
         Start-Process "explorer.exe" -ErrorAction Stop
-        Write-Log "Explorer reiniciado com sucesso." "OK"
     } catch {
         Write-Log "Falha ao iniciar o Explorer: $_" "ERROR"
         Write-Progress -Activity "🎨 Personalização" -Status "Erro ao reiniciar Explorer" -PercentComplete 100
         return $false
     }
 
-    Write-Progress -Activity "🎨 Personalização" -Status "Explorer reiniciado" -PercentComplete 98
-    Start-Sleep -Seconds 2
-    return $true
+    # Confirma que o processo subiu (máx 8s)
+    $waited = 0
+    while (-not (Get-Process -Name "explorer" -ErrorAction SilentlyContinue) -and $waited -lt 16) {
+        Start-Sleep -Milliseconds 500
+        $waited++
+    }
+
+    if (Get-Process -Name "explorer" -ErrorAction SilentlyContinue) {
+        Write-Log "Explorer reiniciado com sucesso." "OK"
+        Write-Progress -Activity "🎨 Personalização" -Status "Explorer reiniciado" -PercentComplete 98
+        return $true
+    } else {
+        Write-Log "Explorer não subiu dentro do tempo esperado." "WARN"
+        Write-Progress -Activity "🎨 Personalização" -Status "Explorer pode não ter subido" -PercentComplete 98
+        return $false
+    }
 }
 
 # ── Encerramento seguro ────────────────────────────────────────────────────────
 function Exit-Script {
     param([int]$Code = 0)
-    # Limpa o buffer de input sem depender de Console::SetIn (que falha em hosts não-interativos)
     try { $Host.UI.RawUI.FlushInputBuffer() } catch { }
     [Environment]::Exit($Code)
 }
@@ -383,8 +457,8 @@ function Exit-Script {
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 Initialize-Environment
-Request-Admin           # eleva e repassa parâmetros; continua se já for admin
-Register-User32Type     # registra P/Invoke antes de qualquer uso
+Request-Admin
+Register-User32Type
 Write-Header
 
 Write-Log "════════════════════════════════════════════════"
@@ -393,11 +467,11 @@ Write-Log " Início   : $($Script:StartTime.ToString('dd/MM/yyyy HH:mm:ss'))"
 Write-Log " Usuário  : $env:USERNAME"
 Write-Log "════════════════════════════════════════════════"
 
-$oemReady    = Prepare-OEMFolder
-$downloadOk  = Get-Wallpaper
+$oemReady   = Prepare-OEMFolder
+$downloadOk = Get-Wallpaper
 
 if ($downloadOk -and $oemReady) {
-    $copied = Install-WallpaperToOEM
+    $copied        = Install-WallpaperToOEM
     $wallpaperFile = if ($copied) { $Script:OEMWallpaperPath } else {
         Write-Log "Falha ao copiar para OEM, utilizando fallback." "WARN"
         $WallpaperFallback
