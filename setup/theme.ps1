@@ -17,7 +17,7 @@
 #>
 
 param(
-    [string]$WallpaperUrl      = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/main/assets/Wallpaper%20OEM.png",
+    [string]$WallpaperUrl      = "https://github.com/GabrielSilvaTI/WinProvision/blob/main/wallpaper/Invictus%20Copa%202026.png",
     [string]$WallpaperFallback = "C:\Windows\Web\Wallpaper\Windows\img19.jpg"
 )
 
