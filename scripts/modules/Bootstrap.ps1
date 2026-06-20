@@ -1,4 +1,4 @@
-﻿# Módulo de Pré-requisitos: Validação e Instalação Offline/Headless de WinGet e Chocolatey
+# Módulo de Pré-requisitos: Validação e Instalação Offline/Headless de WinGet e Chocolatey
 # Garantir encoding UTF-8 com BOM ao salvar este arquivo
 try {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
@@ -19,7 +19,6 @@ try {
         if (Test-Path $WingetExtDir) { Remove-Item $WingetExtDir -Recurse -Force -ErrorAction SilentlyContinue }
         $null = New-Item -Path $WingetExtDir -ItemType Directory -Force
 
-        # Download e extração do WinGet e suas dependências (VCLibs, UI.Xaml, AppRuntime)
         $WebClient = New-Object System.Net.WebClient
         $WebClient.DownloadFile('https://github.com/GabrielSilvaTI/WinProvision/releases/download/V1/winget.zip', $WingetZipPath)
         $WebClient.Dispose()
@@ -27,7 +26,6 @@ try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($WingetZipPath, $WingetExtDir)
 
-        # Ordenação e instalação estrita das dependências antes do pacote principal do WinGet
         $Packages = Get-ChildItem -Path $WingetExtDir -Include "*.msix","*.msixbundle","*.appx","*.appxbundle" -Recurse |
                     Sort-Object {
                         $n = $_.Name.ToLower()
@@ -70,7 +68,6 @@ try {
         if (Test-Path $ChocoExtDir) { Remove-Item $ChocoExtDir -Recurse -Force -ErrorAction SilentlyContinue }
         $null = New-Item -Path $ChocoExtDir -ItemType Directory -Force
 
-        # Download e extração da estrutura oficial do Chocolatey baseada nas imagens fornecidas
         $WebClient = New-Object System.Net.WebClient
         $WebClient.DownloadFile('https://github.com/GabrielSilvaTI/WinProvision/releases/download/V1/chocolatey.zip', $ChocoZipPath)
         $WebClient.Dispose()
@@ -78,10 +75,9 @@ try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($ChocoZipPath, $ChocoExtDir)
 
-        # Execução do script de instalação local contido dentro da pasta extraída
         Set-ExecutionPolicy Bypass -Scope Process -Force
         $InstallScript = Get-ChildItem -Path $ChocoExtDir -Filter "chocolateyInstall.ps1" -Recurse | Select-Object -First 1
-        
+
         if ($InstallScript) {
             & $InstallScript.FullName
         } else {
@@ -110,12 +106,12 @@ try {
         $Manager = $Pkg.ManagerName.ToLower()
         if ($Manager -eq "winget") {
             $Proc = Start-Process -FilePath "winget.exe" -ArgumentList "install --id `"$($Pkg.Id)`" --source winget --exact --accept-package-agreements --accept-source-agreements --disable-interactivity --silent --force" -Wait -PassThru -NoNewWindow
-            
+
             if ($Proc.ExitCode -ne 0) {
                 $ChocoAppName = ($Pkg.Id -split "\.")[-1].ToLower()
                 Start-Process -FilePath "choco.exe" -ArgumentList "install `"$ChocoAppName`" -y --no-progress --silent" -Wait -NoNewWindow
             }
-        } 
+        }
         elseif ($Manager -eq "chocolatey" -or $Manager -eq "choco") {
             Start-Process -FilePath "choco.exe" -ArgumentList "install `"$($Pkg.Id)`" -y --no-progress --silent" -Wait -NoNewWindow
         }
