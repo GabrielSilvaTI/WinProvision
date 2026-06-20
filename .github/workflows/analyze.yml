@@ -11,11 +11,28 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Prepare PowerShell Gallery and Install PSScriptAnalyzer
+        shell: powershell
+        run: |
+          # Força o uso de TLS 1.2 para comunicação segura com a PSGallery
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
+          
+          # Registra novamente a PSGallery padrão caso ela tenha sido corrompida ou removida da VM
+          if (-not (Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue)) {
+              Register-PSRepository -Default -ErrorAction SilentlyContinue
+          }
+          
+          # Define a PSGallery como um repositório confiável para evitar prompts de confirmação ([Y] Yes)
+          Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+          
+          # Instala o PSScriptAnalyzer de forma forçada e silenciosa
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+
       - name: Run PSScriptAnalyzer
         shell: powershell
         run: |
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-          Invoke-ScriptAnalyzer -Path "scripts" -Recurse -OutVariable issues
+          $issues = Invoke-ScriptAnalyzer -Path "scripts" -Recurse
           if ($issues) {
             Write-Error "Foram encontrados problemas no código."
             exit 1
