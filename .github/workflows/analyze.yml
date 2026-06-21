@@ -25,7 +25,14 @@ jobs:
       - name: Run PSScriptAnalyzer with Custom Settings
         shell: powershell
         run: |
-          # Executa a análise aplicando o arquivo de configuração PSD1 customizado (.github/PSScriptAnalyzerSettings.psd1)
+          # Procura todos os ficheiros .ps1 recursivamente na pasta 'scripts'
+          # e re-grava-os garantindo o encoding UTF-8 com BOM (utf8)
+          Get-ChildItem -Path "scripts" -Filter "*.ps1" -Recurse | ForEach-Object {
+              $Content = Get-Content -Path $_.FullName -Raw
+              $Content | Out-File -FilePath $_.FullName -Encoding utf8 -Force
+          }
+
+          # Executa o linter aplicando o teu ficheiro de configurações personalizado
           [array]$issues = Invoke-ScriptAnalyzer -Path "scripts" -Recurse -Settings ".\.github\PSScriptAnalyzerSettings.psd1"
 
           if ($issues.Count -gt 0) {
