@@ -1,13 +1,13 @@
 # Módulo de Instalação do Office via Office Tool Plus
 # Garantir encoding UTF-8 com BOM ao salvar este arquivo
 
-$OtpApiUrl   = "https://api.github.com/repos/YerongAI/Office-Tool/releases/latest"
+$OtpApiUrl = "https://api.github.com/repos/YerongAI/Office-Tool/releases/latest"
 $FallbackUrl = "https://github.com/GabrielSilvaTI/WinProvision/releases/download/V1/OTP.zip"
 
 # Alterado para SystemRoot\Temp para garantir total compatibilidade com contextos SYSTEM/MDM/SCCM
-$TempDir     = Join-Path -Path $env:SystemRoot -ChildPath "Temp\OTP_Provisioning"
-$ZipFile     = Join-Path -Path $TempDir -ChildPath "OTP.zip"
-$ExePath     = Join-Path -Path $TempDir -ChildPath "Office Tool Plus.Console.exe"
+$TempDir = Join-Path -Path $env:SystemRoot -ChildPath "Temp\OTP_Provisioning"
+$ZipFile = Join-Path -Path $TempDir -ChildPath "OTP.zip"
+$ExePath = Join-Path -Path $TempDir -ChildPath "Office Tool Plus.Console.exe"
 
 # Verificar se o Office já está instalado
 $OfficeInstalled = $false
@@ -77,19 +77,19 @@ try {
         if (-not $Found) {
             throw "Executavel do OTP nao encontrado apos extracao em $TempDir."
         }
-        $ExePath       = $Found.FullName
+        $ExePath = $Found.FullName
         $WorkingFolder = $Found.DirectoryName
     }
 
     Write-Output "Iniciando deployment do Office 365 (pode levar de 15 a 60 minutos)..."
     $ProcessArgs = "deploy /add O365HomePremRetail_pt-br /channel Current /edition 64 /display false /enableupdates true"
-    
+
     # Logs apontando dinamicamente para a pasta de execução ativa
     $StdOutLog = Join-Path -Path $WorkingFolder -ChildPath "deploy_stdout.log"
     $StdErrLog = Join-Path -Path $WorkingFolder -ChildPath "deploy_stderr.log"
-    
-    $Process = Start-Process -FilePath $ExePath -ArgumentList $ProcessArgs -Wait -PassThru -NoNewWindow `
-        -RedirectStandardOutput $StdOutLog -RedirectStandardError $StdErrLog
+
+    # Removido o caractere de quebra de linha (backtick) para evitar trailing whitespaces invisíveis
+    $Process = Start-Process -FilePath $ExePath -ArgumentList $ProcessArgs -Wait -PassThru -NoNewWindow -RedirectStandardOutput $StdOutLog -RedirectStandardError $StdErrLog
 
     if ($Process.ExitCode -eq 0) {
         Write-Output "Office instalado com sucesso."
