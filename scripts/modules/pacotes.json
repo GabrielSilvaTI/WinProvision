@@ -9,18 +9,18 @@
       "ManagerName": "winget"
     },
     {
+      "Id": "HydraLauncher.Hydra",
+      "Name": "Hydra",
+      "Version": "4.0.2",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
       "Id": "RARLab.WinRAR",
       "Name": "WinRAR",
       "Version": "7.22.0",
       "Source": "winget",
       "ManagerName": "winget"
-    },
-    {
-      "Id": "atubecatcher",
-      "Name": "Atubecatcher",
-      "Version": "3.8.9622",
-      "Source": "community",
-      "ManagerName": "chocolatey"
     }
   ],
   "incompatible_packages_info": "Incompatible packages cannot be installed from UniGetUI, either because they came from a local source (for example Local PC) or because the package manager was unavailable. Nevertheless, they have been listed here for logging purposes.",
