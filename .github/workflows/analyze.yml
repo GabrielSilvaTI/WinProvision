@@ -22,11 +22,13 @@ jobs:
           Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
 
-      - name: Run PSScriptAnalyzer
+      - name: Run PSScriptAnalyzer with Custom Settings
         shell: powershell
         run: |
-          $issues = Invoke-ScriptAnalyzer -Path "scripts" -Recurse
-          if ($issues) {
+          # Executa a análise aplicando o arquivo de configuração PSD1 customizado (.github/PSScriptAnalyzerSettings.psd1)
+          [array]$issues = Invoke-ScriptAnalyzer -Path "scripts" -Recurse -Settings ".\.github\PSScriptAnalyzerSettings.psd1"
+
+          if ($issues.Count -gt 0) {
               foreach ($issue in $issues) {
                   Write-Output "[$($issue.Severity)] No arquivo: $($issue.ScriptName) (Linha $($issue.Line)): $($issue.Message) [Regra: $($issue.RuleName)]"
               }
