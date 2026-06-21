@@ -36,7 +36,7 @@ try {
     try {
         Remove-MpPreference -ExclusionPath $WorkingDir -ErrorAction SilentlyContinue
     } catch {
-        # Supressao intencional recomendada pela regra PSAvoidUsingEmptyCatchBlock
+        $null = $_
     }
 
     if ($Process.ExitCode -eq 0) {
@@ -49,7 +49,7 @@ try {
     try {
         Remove-MpPreference -ExclusionPath $WorkingDir -ErrorAction SilentlyContinue
     } catch {
-        # Supressao intencional recomendada pela regra PSAvoidUsingEmptyCatchBlock
+        $null = $_
     }
     Write-Error "Erro no modulo MAS: $_"
     exit 1
