@@ -4,14 +4,14 @@
     {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
-      "Version": "149.0.7827.156",
+      "Version": "149.0.7827.197",
       "Source": "winget",
       "ManagerName": "winget"
     },
     {
       "Id": "HydraLauncher.Hydra",
       "Name": "Hydra",
-      "Version": "4.0.2",
+      "Version": "4.0.3",
       "Source": "winget",
       "ManagerName": "winget"
     },
@@ -21,6 +21,13 @@
       "Version": "7.22.0",
       "Source": "winget",
       "ManagerName": "winget"
+    },
+    {
+      "Id": "steam",
+      "Name": "Steam",
+      "Version": "3.10.91.91241028",
+      "Source": "community",
+      "ManagerName": "chocolatey"
     }
   ],
   "incompatible_packages_info": "Incompatible packages cannot be installed from UniGetUI, either because they came from a local source (for example Local PC) or because the package manager was unavailable. Nevertheless, they have been listed here for logging purposes.",
