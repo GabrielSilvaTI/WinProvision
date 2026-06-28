@@ -1,69 +1,207 @@
-# Configurações
-$LogFile = "C:\Windows\Temp\WinProvision_Log.txt"
-$MaxRetries = 3
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    WinProvision Orchestrator - Provisionamento automatizado do Windows.
+.DESCRIPTION
+    Executa sequencialmente os modulos Bootstrap, Office e MAS com suporte a
+    repeticao automatica, verificacao de conectividade e log detalhado.
+.NOTES
+    Requer execucao como Administrador.
+    Compativel com PowerShell 5.1 e PSScriptAnalyzer (PSGallery rules).
+#>
 
-# Função para registrar logs
+[CmdletBinding()]
+param()
+
+#region Configuracoes
+$script:LogFile         = Join-Path -Path $env:SystemRoot -ChildPath 'Temp\WinProvision_Log.txt'
+$script:MaxRetries      = 3
+$script:RetryDelaySec   = 5
+$script:NetworkDelaySec = 10
+#endregion
+
+#region Funcoes auxiliares
+
 function Write-Log {
-    param([string]$Message)
-    $Timestamp = Get-Date -Format "dd/MM/yyyy HH:mm:ss"
-    "[$Timestamp] $Message" | Out-File -FilePath $LogFile -Append
+    <#
+    .SYNOPSIS
+        Grava uma entrada de log com timestamp e nivel no arquivo de log.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+
+        [ValidateSet('INFO', 'WARN', 'ERROR')]
+        [string]$Level = 'INFO'
+    )
+
+    $timestamp = Get-Date -Format 'dd/MM/yyyy HH:mm:ss'
+    $entry     = "[$timestamp][$Level] $Message"
+
+    try {
+        $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
+    }
+    catch {
+        Write-Warning "Nao foi possivel gravar no log: $($_.Exception.Message)"
+    }
 }
 
-# Função de verificação de rede
 function Test-InternetConnection {
-    return (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet)
+    <#
+    .SYNOPSIS
+        Verifica conectividade com a internet via ping ao 8.8.8.8.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    $result = Test-Connection -ComputerName '8.8.8.8' -Count 1 -Quiet -ErrorAction SilentlyContinue
+    return [bool]$result
 }
 
-# Início do processo
-Write-Host "Iniciando WinProvision Orchestrator..." -ForegroundColor Cyan
-Write-Log "Iniciando orquestrador. Ordem: Bootstrap, Office, MAS."
+function Invoke-RemoteScript {
+    <#
+    .SYNOPSIS
+        Baixa e executa um script remoto com suporte a retry e log.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
 
-# Lista de tarefas
-$Tasks = @(
-    @{ Name = "Bootstrap"; URL = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Bootstrap.ps1" },
-    @{ Name = "Office";    URL = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/office.ps1" },
-    @{ Name = "MAS";       URL = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Ohook.ps1" }
-)
+        [Parameter(Mandatory = $true)]
+        [string]$Url
+    )
 
-# Configura segurança global para TLS 1.2
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-# Execução com Retry
-foreach ($Task in $Tasks) {
     $attempt = 0
     $success = $false
 
-    while ($attempt -lt $MaxRetries -and -not $success) {
+    while ($attempt -lt $script:MaxRetries -and -not $success) {
         $attempt++
-        Write-Log "Executando $($Task.Name) (Tentativa $attempt)..."
-        
-        if (Test-InternetConnection) {
-            try {
-                $scriptContent = Invoke-RestMethod -Uri $Task.URL
-                Invoke-Expression $scriptContent
-                $success = $true
-                Write-Log "$($Task.Name) concluído com sucesso."
-                Write-Host "$($Task.Name) concluído com sucesso." -ForegroundColor Green
+        Write-Log -Message "Executando '$Name' (Tentativa $attempt de $($script:MaxRetries))..."
+
+        if (-not (Test-InternetConnection)) {
+            Write-Log -Level 'WARN' -Message "Sem conexao para '$Name'. Aguardando $($script:NetworkDelaySec)s..."
+            Write-Warning "[$Name] Sem conexao. Aguardando $($script:NetworkDelaySec) segundos..."
+            Start-Sleep -Seconds $script:NetworkDelaySec
+            continue
+        }
+
+        try {
+            # Baixa o conteudo do script remoto
+            $scriptContent = Invoke-RestMethod -Uri $Url -UseBasicParsing -ErrorAction Stop
+
+            if ([string]::IsNullOrWhiteSpace($scriptContent)) {
+                Write-Log -Level 'ERROR' -Message "Conteudo vazio retornado para '$Name'."
+                Write-Warning "[$Name] O script remoto veio vazio."
+                break
             }
-            catch {
-                $errMsg = $($_.Exception.Message)
-                Write-Log "ERRO no $($Task.Name) (Tentativa $attempt): $errMsg"
-                Write-Host "Erro ao executar $($Task.Name). Tentando novamente..." -ForegroundColor Yellow
-                Start-Sleep -Seconds 5
+
+            # Executa em escopo local; erros internos sao capturados sem propagar excecao pai
+            $scriptBlock = [scriptblock]::Create($scriptContent)
+            & $scriptBlock
+
+            $success = $true
+            Write-Log -Message "'$Name' concluido com sucesso."
+            Write-Host "[$Name] Concluido com sucesso." -ForegroundColor Green
+        }
+        catch {
+            # Extrai a mensagem mais profunda da cadeia de excecoes
+            $inner = $_.Exception
+            while ($null -ne $inner.InnerException) { $inner = $inner.InnerException }
+            $errorMessage = $inner.Message
+
+            Write-Log -Level 'ERROR' -Message "ERRO em '$Name' (Tentativa $attempt): $errorMessage"
+            Write-Warning "[$Name] Erro na tentativa ${attempt}: $errorMessage"
+
+            if ($attempt -lt $script:MaxRetries) {
+                Write-Host "[$Name] Tentando novamente em $($script:RetryDelaySec)s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $script:RetryDelaySec
             }
-        } else {
-            Write-Log "Sem conexão para $($Task.Name). Aguardando..."
-            Start-Sleep -Seconds 10
         }
     }
-    
+
     if (-not $success) {
-        Write-Log "Falha crítica ao executar $($Task.Name) após $MaxRetries tentativas."
+        Write-Log -Level 'ERROR' -Message "FALHA CRITICA: '$Name' nao executado apos $($script:MaxRetries) tentativas."
+        Write-Host "[$Name] Falhou apos $($script:MaxRetries) tentativas. Verifique o log." -ForegroundColor Red
+    }
+
+    return $success
+}
+
+#endregion
+
+#region Inicializacao
+
+# Garante que o diretorio de log existe
+$logDir = Split-Path -Path $script:LogFile -Parent
+if (-not (Test-Path -Path $logDir -PathType Container)) {
+    $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction SilentlyContinue
+}
+
+# Forca TLS 1.2 (necessario no PS 5.1 para requisicoes HTTPS)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+Write-Host 'Iniciando WinProvision Orchestrator...' -ForegroundColor Cyan
+Write-Log -Message 'Orquestrador iniciado. Ordem: Bootstrap, Office, MAS.'
+
+#endregion
+
+#region Definicao das tarefas
+
+$tasks = @(
+    [PSCustomObject]@{
+        Name = 'Bootstrap'
+        Url  = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Bootstrap.ps1'
+    },
+    [PSCustomObject]@{
+        Name = 'Office'
+        Url  = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/office.ps1'
+    },
+    [PSCustomObject]@{
+        Name = 'MAS'
+        Url  = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Ohook.ps1'
+    }
+)
+
+#endregion
+
+#region Execucao das tarefas
+
+$results = New-Object -TypeName 'System.Collections.Generic.List[PSCustomObject]'
+
+foreach ($task in $tasks) {
+    $succeeded = Invoke-RemoteScript -Name $task.Name -Url $task.Url
+    $results.Add(
+        [PSCustomObject]@{
+            Task    = $task.Name
+            Success = $succeeded
+        }
+    )
+}
+
+#endregion
+
+#region Resumo final
+
+Write-Host ''
+Write-Host '=== Resumo do Provisionamento ===' -ForegroundColor Cyan
+
+foreach ($result in $results) {
+    if ($result.Success) {
+        Write-Host ("  [OK   ] {0}" -f $result.Task) -ForegroundColor Green
+    }
+    else {
+        Write-Host ("  [FALHA] {0}" -f $result.Task) -ForegroundColor Red
     }
 }
 
-Write-Log "Orquestrador finalizado."
-Write-Host "Processo concluído. Confira o log em $LogFile" -ForegroundColor Green
+Write-Host ''
+Write-Host "Log completo em: $($script:LogFile)" -ForegroundColor Cyan
+Write-Log -Message 'Orquestrador finalizado.'
 
-# Finaliza o processo do PowerShell
-exit
+#endregion
+
+exit 0
