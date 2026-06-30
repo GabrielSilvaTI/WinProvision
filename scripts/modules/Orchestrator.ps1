@@ -50,13 +50,15 @@ function Write-Log {
 function Test-InternetConnection {
     <#
     .SYNOPSIS
-        Verifica conectividade com a internet via ping ao 8.8.8.8.
+        Verifica conectividade com a internet via ping.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
-    param()
+    param(
+        [string]$TargetHost = '8.8.8.8'
+    )
 
-    $result = Test-Connection -ComputerName '8.8.8.8' -Count 1 -Quiet -ErrorAction SilentlyContinue
+    $result = Test-Connection -ComputerName $TargetHost -Count 1 -Quiet -ErrorAction SilentlyContinue
     return [bool]$result
 }
 
@@ -191,7 +193,7 @@ Write-Host '=== Resumo do Provisionamento ===' -ForegroundColor Cyan
 
 foreach ($result in $results) {
     if ($result.Success) {
-        Write-Host ("  [OK   ] {0}" -f $result.Task) -ForegroundColor Green
+        Write-Host ("  [OK    ] {0}" -f $result.Task) -ForegroundColor Green
     }
     else {
         Write-Host ("  [FALHA] {0}" -f $result.Task) -ForegroundColor Red
