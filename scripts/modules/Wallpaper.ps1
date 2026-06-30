@@ -6,7 +6,8 @@
     Invocar sempre como arquivo:
         powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "WinProvision_Wallpaper.ps1"
 .NOTES
-    Versao : 1.6.5 (Resiliente e Idempotente)
+    Versao : 1.6.6 (Resiliente, Idempotente e CI/CD Compliant)
+        - Ajustado para compliance com PSScriptAnalyzer (Singular Nouns, ShouldProcess, etc.)
         - Removido o bloco de auto-relancador (causador de travamentos de I/O em subshells)
         - Bloqueio robusto de Add-Type (evita crash de "Type Already Exists")
         - Insercao de Set-Acl obrigatorio para evitar E_FAIL no COM
@@ -45,14 +46,18 @@ function Write-Log {
     param([string]$Msg, [string]$Level = "INFO")
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "$ts [$Level] $Msg"
-    try { Add-Content -Path $Script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue } catch { }
+    try {
+        Add-Content -Path $Script:LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {
+        Write-Verbose "Falha ao gravar log no arquivo: $($_.Exception.Message)"
+    }
     Write-Host "[$Level] $Msg"
 }
 
 # ==============================================================================
 #  FUNCOES CORE
 # ==============================================================================
-function Install-WallpaperAssets {
+function Install-WallpaperAsset {
     Write-Log "Instalando assets OEM..." "STEP"
 
     if (-not (Test-Path $Script:TargetDir)) {
@@ -65,7 +70,9 @@ function Install-WallpaperAssets {
         $Rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow")
         $Acl.SetAccessRule($Rule)
         Set-Acl -Path $Script:TargetDir -AclObject $Acl
-    } catch { Write-Log "Falha ao definir ACL, prosseguindo..." "WARN" }
+    } catch {
+        Write-Log "Falha ao definir ACL, prosseguindo..." "WARN"
+    }
 
     $Existing = Get-ChildItem -Path $Script:TargetDir -Include "*.jpg","*.jpeg","*.png" -Recurse -ErrorAction SilentlyContinue
     if ($Existing.Count -gt 0) {
@@ -77,7 +84,7 @@ function Install-WallpaperAssets {
         Write-Log "Baixando pacote ZIP..." "INFO"
         $wc = New-Object System.Net.WebClient
         $wc.DownloadFile($Script:DownloadUrl, $Script:ZipPath)
-        
+
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [System.IO.Compression.ZipFile]::ExtractToDirectory($Script:ZipPath, $Script:TargetDir)
         Write-Log "Extracao concluida." "OK"
@@ -90,7 +97,7 @@ function Install-WallpaperAssets {
     }
 }
 
-function Register-WallpaperTypes {
+function Register-WallpaperType {
     # Guard clause infalivel para UserOnce/Sandbox (evita travamento do Add-Type)
     if ([System.Management.Automation.PSTypeName]'WinProvision.Wallpaper.WallpaperHelper' -as [type]) {
         return
@@ -178,14 +185,17 @@ namespace WinProvision.Wallpaper {
 }
 
 function Set-SlideshowConfig {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     Write-Log "Aplicando Slideshow via API COM e Registro..." "STEP"
-    Register-WallpaperTypes
-    
+    Register-WallpaperType
+
     # 1. Tenta API COM (Slideshow)
     $Err = [WinProvision.Wallpaper.WallpaperHelper]::ApplySlideshow($Script:TargetDir, [uint32]$Script:SlideshowShuffle, [uint32]$Script:SlideshowIntervalMs)
     if ($Err -ne [string]::Empty) { Write-Log "Aviso COM: $Err" "WARN" }
 
-    # 2. Reforça via Registro (Garante que o Explorer assuma o controle)
+    # 2. Reforca via Registro (Garante que o Explorer assuma o controle)
     $RegPaths = @(
         "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers",
         "HKCU:\Control Panel\Personalization\Desktop Slideshow",
@@ -201,6 +211,9 @@ function Set-SlideshowConfig {
 }
 
 function Set-SpotlightFallback {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
     Write-Log "Ativando Windows Spotlight (Fallback)..." "WARN"
     $cdk = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
     if (-not (Test-Path $cdk)) { New-Item $cdk -Force | Out-Null }
@@ -212,7 +225,7 @@ function Set-SpotlightFallback {
 # ==============================================================================
 try {
     Write-Log "Iniciando WinProvision Wallpaper" "INFO"
-    $AssetsOk = Install-WallpaperAssets
+    $AssetsOk = Install-WallpaperAsset
 
     if ($AssetsOk) {
         Set-SlideshowConfig
