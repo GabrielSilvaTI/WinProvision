@@ -17,7 +17,12 @@ $script:NetworkDelaySec = 10
 function Write-Log {
     param([Parameter(Mandatory=$true)][string]$Message, [ValidateSet('INFO','WARN','ERROR')][string]$Level = 'INFO')
     $entry = "[$(Get-Date -Format 'dd/MM/yyyy HH:mm:ss')][$Level] $Message"
-    try { $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8 } catch { }
+    try {
+        $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
+    }
+    catch {
+        Write-Error "Nao foi possivel gravar no log: $($_.Exception.Message)"
+    }
     Write-Host $entry -ForegroundColor $(switch($Level){'INFO'{'Cyan'};'WARN'{'Yellow'};'ERROR'{'Red'}})
 }
 
@@ -37,7 +42,6 @@ function Invoke-Module {
             $content | Out-File -FilePath $tempScript -Encoding UTF8
 
             # EXECUTA EM PROCESSO FILHO (Isolado)
-            # O exit do script filho nao afetara o Orquestrador
             $proc = Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tempScript`"" -Wait -PassThru
             
             Remove-Item $tempScript -Force -ErrorAction SilentlyContinue
@@ -62,7 +66,7 @@ $logDir = Split-Path $script:LogFile -Parent
 if (-not (Test-Path $logDir)) { New-Item $logDir -ItemType Directory -Force | Out-Null }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Lista de Tarefas (Ordem sequencial garantida)
+# Lista de Tarefas
 $tasks = @(
     @{Name='Wallpaper'; Url='https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Wallpaper.ps1'},
     @{Name='Bootstrap'; Url='https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/Bootstrap.ps1'},
