@@ -2,9 +2,16 @@
   "export_version": 3,
   "packages": [
     {
+      "Id": "Devolutions.UniGetUI",
+      "Name": "UniGetUI",
+      "Version": "2026.2.2",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
-      "Version": "149.0.7827.197",
+      "Version": "150.0.7871.47",
       "Source": "winget",
       "ManagerName": "winget"
     },
@@ -16,18 +23,25 @@
       "ManagerName": "winget"
     },
     {
-      "Id": "RARLab.WinRAR",
-      "Name": "WinRAR",
-      "Version": "7.22.0",
+      "Id": "LocalSend.LocalSend",
+      "Name": "LocalSend",
+      "Version": "1.17.0",
       "Source": "winget",
       "ManagerName": "winget"
     },
     {
-      "Id": "steam",
+      "Id": "RARLab.WinRAR",
+      "Name": "WinRAR",
+      "Version": "7.23.0",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "Valve.Steam",
       "Name": "Steam",
-      "Version": "3.10.91.91241028",
-      "Source": "community",
-      "ManagerName": "chocolatey"
+      "Version": "2.10.91.91",
+      "Source": "winget",
+      "ManagerName": "winget"
     }
   ],
   "incompatible_packages_info": "Incompatible packages cannot be installed from UniGetUI, either because they came from a local source (for example Local PC) or because the package manager was unavailable. Nevertheless, they have been listed here for logging purposes.",
