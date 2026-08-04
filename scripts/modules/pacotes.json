@@ -2,44 +2,9 @@
   "export_version": 3,
   "packages": [
     {
-      "Id": "Devolutions.UniGetUI",
-      "Name": "UniGetUI",
-      "Version": "2026.2.2",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
-      "Version": "150.0.7871.47",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "HydraLauncher.Hydra",
-      "Name": "Hydra",
-      "Version": "4.0.3",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "LocalSend.LocalSend",
-      "Name": "LocalSend",
-      "Version": "1.17.0",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "RARLab.WinRAR",
-      "Name": "WinRAR",
-      "Version": "7.23.0",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "Valve.Steam",
-      "Name": "Steam",
-      "Version": "2.10.91.91",
+      "Version": "151.0.7922.72",
       "Source": "winget",
       "ManagerName": "winget"
     }
