@@ -4,15 +4,21 @@
 .DESCRIPTION
     100% autonomo e compativel com UserOnce (sessao interativa) e Windows Sandbox.
     Invocar sempre como arquivo:
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "WinProvision_Wallpaper.ps1"
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "WinProvision_Wallpaper.ps1" -LogPath "C:\caminho\log.log"
 .NOTES
-    Versao : 1.6.6 (Resiliente, Idempotente e CI/CD Compliant)
-        - Ajustado para compliance com PSScriptAnalyzer (Singular Nouns, ShouldProcess, etc.)
-        - Removido o bloco de auto-relancador (causador de travamentos de I/O em subshells)
-        - Bloqueio robusto de Add-Type (evita crash de "Type Already Exists")
-        - Insercao de Set-Acl obrigatorio para evitar E_FAIL no COM
-        - Try/Catch global forcado sem interatividade
+    Versao : 1.7.0 (Compativel com Orchestrator, retry de download, validacao de ZIP)
+        - Aceita -LogPath do Orchestrator para compartilhar o mesmo arquivo de log
+        - Emite linhas [PROGRESS] NN% lidas pela barra de progresso do Orchestrator
+        - Download com timeout e retry, alinhado ao padrao do Bootstrap
+        - Validacao de integridade do ZIP antes da extracao
+        - TLS restrito a 1.2/1.3, alinhado ao Orchestrator
 #>
+
+[CmdletBinding()]
+param(
+    # Quando informado pelo Orchestrator, o modulo escreve no mesmo log compartilhado
+    [string]$LogPath
+)
 
 # ==============================================================================
 #  VERIFICACAO DE AMBIENTE E SEGURANCA
@@ -22,8 +28,8 @@ $ProgressPreference    = "SilentlyContinue"
 
 if ($PSVersionTable.PSVersion.Major -lt 5) { exit 2 }
 
-# Forca TLS 1.2
-[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls11 -bor [System.Net.SecurityProtocolType]::Tls
+# Forca TLS 1.2/1.3, alinhado ao Orchestrator (protocolos legados removidos)
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
 
 # ==============================================================================
 #  CONFIGURACAO
@@ -32,15 +38,21 @@ $Script:TargetDir           = "$env:SystemRoot\Web\Wallpaper\OEM"
 $Script:ZipPath             = "$env:TEMP\WinProvision_Wallpaper_$PID.zip"
 $Script:DownloadUrl         = "https://github.com/GabrielSilvaTI/WinProvision/releases/download/V1/Wallpaper.zip"
 $Script:LogDir              = "$env:SystemRoot\Logs\CloudProvisioning"
-$Script:LogFile             = "$Script:LogDir\Wallpaper_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$Script:LogFile             = if ($LogPath) { $LogPath } else { "$Script:LogDir\Wallpaper_$(Get-Date -Format 'yyyyMMdd_HHmmss').log" }
 $Script:StartTime           = Get-Date
 $Script:SlideshowIntervalMs = 600000   # 10 minutos
 $Script:SlideshowShuffle    = 1        # 1 = embaralhar
+$Script:MaxRetries          = 3
+$Script:RetryDelaySec       = 5
+$Script:DownloadTimeoutSec  = 60
 
 # ==============================================================================
 #  LOGGING
 # ==============================================================================
-if (-not (Test-Path $Script:LogDir)) { New-Item -ItemType Directory -Path $Script:LogDir -Force -ErrorAction SilentlyContinue | Out-Null }
+$Script:LogFileDir = Split-Path -Path $Script:LogFile -Parent
+if ($Script:LogFileDir -and -not (Test-Path $Script:LogFileDir)) {
+    New-Item -ItemType Directory -Path $Script:LogFileDir -Force -ErrorAction SilentlyContinue | Out-Null
+}
 
 function Write-Log {
     param([string]$Msg, [string]$Level = "INFO")
@@ -54,11 +66,52 @@ function Write-Log {
     Write-Host "[$Level] $Msg"
 }
 
+function Write-ModuleProgress {
+    param([int]$Percent, [string]$Status)
+    Write-Log "$Percent% - $Status" "PROGRESS"
+}
+
 # ==============================================================================
 #  FUNCOES CORE
 # ==============================================================================
+function Get-WallpaperPackage {
+    [CmdletBinding()]
+    param()
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+
+    for ($attempt = 1; $attempt -le $Script:MaxRetries; $attempt++) {
+        try {
+            Write-Log "Baixando pacote ZIP (tentativa $attempt/$Script:MaxRetries)..." "INFO"
+            Invoke-WebRequest -Uri $Script:DownloadUrl -OutFile $Script:ZipPath -UseBasicParsing -TimeoutSec $Script:DownloadTimeoutSec -ErrorAction Stop
+
+            if (-not (Test-Path $Script:ZipPath) -or (Get-Item $Script:ZipPath).Length -eq 0) {
+                throw "Arquivo ZIP baixado esta vazio ou ausente."
+            }
+
+            # Validacao de integridade: abre o pacote antes de extrair para nao falhar no meio da extracao
+            $TestZip = $null
+            try {
+                $TestZip = [System.IO.Compression.ZipFile]::OpenRead($Script:ZipPath)
+            } catch {
+                throw "Arquivo ZIP corrompido: $($_.Exception.Message)"
+            } finally {
+                if ($TestZip) { $TestZip.Dispose() }
+            }
+
+            return $true
+        } catch {
+            Write-Log "Falha no download/validacao (tentativa $attempt/$Script:MaxRetries): $($_.Exception.Message)" "WARN"
+            Remove-Item $Script:ZipPath -Force -ErrorAction SilentlyContinue
+            if ($attempt -lt $Script:MaxRetries) { Start-Sleep -Seconds $Script:RetryDelaySec }
+        }
+    }
+    return $false
+}
+
 function Install-WallpaperAsset {
     Write-Log "Instalando assets OEM..." "STEP"
+    Write-ModuleProgress -Percent 10 -Status "Verificando assets existentes"
 
     if (-not (Test-Path $Script:TargetDir)) {
         New-Item -Path $Script:TargetDir -ItemType Directory -Force | Out-Null
@@ -77,20 +130,26 @@ function Install-WallpaperAsset {
     $Existing = Get-ChildItem -Path $Script:TargetDir -Include "*.jpg","*.jpeg","*.png" -Recurse -ErrorAction SilentlyContinue
     if ($Existing.Count -gt 0) {
         Write-Log "$($Existing.Count) imagens ja presentes. Download ignorado." "OK"
+        Write-ModuleProgress -Percent 50 -Status "Assets ja presentes"
         return $true
     }
 
+    Write-ModuleProgress -Percent 20 -Status "Baixando pacote de wallpapers"
     try {
-        Write-Log "Baixando pacote ZIP..." "INFO"
-        $wc = New-Object System.Net.WebClient
-        $wc.DownloadFile($Script:DownloadUrl, $Script:ZipPath)
+        $Downloaded = Get-WallpaperPackage
+        if (-not $Downloaded) {
+            Write-Log "Nao foi possivel baixar/validar o pacote ZIP apos $Script:MaxRetries tentativas." "ERROR"
+            return $false
+        }
 
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        Write-ModuleProgress -Percent 40 -Status "Extraindo pacote"
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
         [System.IO.Compression.ZipFile]::ExtractToDirectory($Script:ZipPath, $Script:TargetDir)
         Write-Log "Extracao concluida." "OK"
+        Write-ModuleProgress -Percent 50 -Status "Extracao concluida"
         return $true
     } catch {
-        Write-Log "Falha ao baixar/extrair: $_" "ERROR"
+        Write-Log "Falha ao extrair: $_" "ERROR"
         return $false
     } finally {
         Remove-Item $Script:ZipPath -Force -ErrorAction SilentlyContinue
@@ -189,11 +248,14 @@ function Set-SlideshowConfig {
     param()
 
     Write-Log "Aplicando Slideshow via API COM e Registro..." "STEP"
+    Write-ModuleProgress -Percent 70 -Status "Registrando tipo COM"
     Register-WallpaperType
 
     # 1. Tenta API COM (Slideshow)
     $Err = [WinProvision.Wallpaper.WallpaperHelper]::ApplySlideshow($Script:TargetDir, [uint32]$Script:SlideshowShuffle, [uint32]$Script:SlideshowIntervalMs)
     if ($Err -ne [string]::Empty) { Write-Log "Aviso COM: $Err" "WARN" }
+
+    Write-ModuleProgress -Percent 85 -Status "Aplicando chaves de registro"
 
     # 2. Reforca via Registro (Garante que o Explorer assuma o controle)
     $RegPaths = @(
@@ -208,6 +270,8 @@ function Set-SlideshowConfig {
     Set-ItemProperty -Path $RegPaths[1] -Name "Interval" -Value $Script:SlideshowIntervalMs -Type DWord -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $RegPaths[1] -Name "Shuffle" -Value $Script:SlideshowShuffle -Type DWord -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path $RegPaths[2] -Name "EnabledState" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+
+    Write-ModuleProgress -Percent 95 -Status "Configuracao aplicada"
 }
 
 function Set-SpotlightFallback {
@@ -225,11 +289,13 @@ function Set-SpotlightFallback {
 # ==============================================================================
 try {
     Write-Log "Iniciando WinProvision Wallpaper" "INFO"
+    Write-ModuleProgress -Percent 0 -Status "Iniciando"
     $AssetsOk = Install-WallpaperAsset
 
     if ($AssetsOk) {
         Set-SlideshowConfig
         Write-Log "Provisionamento concluido com sucesso." "OK"
+        Write-ModuleProgress -Percent 100 -Status "Concluido"
         exit 0
     } else {
         Set-SpotlightFallback
