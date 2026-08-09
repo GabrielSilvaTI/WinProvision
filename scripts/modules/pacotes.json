@@ -35,6 +35,13 @@
       "Version": "2.10.91.91",
       "Source": "winget",
       "ManagerName": "winget"
+    },
+    {
+      "Id": "VideoLAN.VLC",
+      "Name": "VLC media player",
+      "Version": "3.0.23",
+      "Source": "winget",
+      "ManagerName": "winget"
     }
   ],
   "incompatible_packages_info": "Incompatible packages cannot be installed from UniGetUI, either because they came from a local source (for example Local PC) or because the package manager was unavailable. Nevertheless, they have been listed here for logging purposes.",
