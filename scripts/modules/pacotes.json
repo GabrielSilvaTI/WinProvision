@@ -2,6 +2,13 @@
   "export_version": 3,
   "packages": [
     {
+      "Id": "Adobe.Acrobat.Reader.64-bit",
+      "Name": "Adobe Acrobat Reader (64-bit)",
+      "Version": "26.001.21771",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
       "Version": "151.0.7922.109",
