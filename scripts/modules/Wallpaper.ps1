@@ -76,6 +76,7 @@ function Write-ModuleProgress {
 # ==============================================================================
 function Get-WallpaperPackage {
     [CmdletBinding()]
+    [OutputType([bool])]
     param()
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
