@@ -6,7 +6,7 @@
     Módulo autônomo e integrado ao WinProvision Orchestrator. Baixa e executa
     o Microsoft Activation Scripts em modo não-interativo (/Ohook).
 .NOTES
-    Versão : 1.9.1 (Linting Fixes - PSScriptAnalyzer Compliance)
+    Versão : 1.9.2 (Linting Fixes - PSScriptAnalyzer ShouldProcess Compliance)
 #>
 [CmdletBinding()]
 param(
@@ -50,14 +50,19 @@ function Write-Log {
 }
 
 function Set-DefenderExclusion {
+    [CmdletBinding(SupportsShouldProcess)]
     param([bool]$Add)
     try {
         if ($Add) {
             Write-Log "Aplicando exclusão temporária no Windows Defender..." "INFO"
-            Add-MpPreference -ExclusionPath $WorkingDir -ErrorAction Stop
+            if ($PSCmdlet.ShouldProcess($WorkingDir, "Add-MpPreference")) {
+                Add-MpPreference -ExclusionPath $WorkingDir -ErrorAction Stop
+            }
         } else {
             Write-Log "Removendo exclusão do Windows Defender..." "INFO"
-            Remove-MpPreference -ExclusionPath $WorkingDir -ErrorAction SilentlyContinue
+            if ($PSCmdlet.ShouldProcess($WorkingDir, "Remove-MpPreference")) {
+                Remove-MpPreference -ExclusionPath $WorkingDir -ErrorAction SilentlyContinue
+            }
         }
     } catch {
         Write-Log "Aviso ao manipular exclusão do Defender: $($_.Exception.Message)" "WARN"
