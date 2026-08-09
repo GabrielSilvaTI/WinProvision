@@ -2,9 +2,9 @@
   "export_version": 3,
   "packages": [
     {
-      "Id": "Google.Chrome",
-      "Name": "Google Chrome",
-      "Version": "151.0.7922.72",
+      "Id": "EpicGames.EpicGamesLauncher",
+      "Name": "Epic Games Launcher",
+      "Version": "1.3.193.0",
       "Source": "winget",
       "ManagerName": "winget"
     }
