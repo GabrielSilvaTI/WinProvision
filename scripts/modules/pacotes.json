@@ -2,13 +2,6 @@
   "export_version": 3,
   "packages": [
     {
-      "Id": "Adobe.Acrobat.Reader.64-bit",
-      "Name": "Adobe Acrobat Reader (64-bit)",
-      "Version": "26.001.21771",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
       "Version": "151.0.7922.109",
@@ -40,13 +33,6 @@
       "Id": "Valve.Steam",
       "Name": "Steam",
       "Version": "2.10.91.91",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "VideoLAN.VLC",
-      "Name": "VLC media player",
-      "Version": "3.0.23",
       "Source": "winget",
       "ManagerName": "winget"
     }
