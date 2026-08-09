@@ -61,14 +61,19 @@ function Write-Log {
 
     try {
         Add-Content -Path $LogPath -Value $FormattedLine -Encoding UTF8 -ErrorAction SilentlyContinue
-    } catch {}
+    } catch {
+        Write-Error "Falha ao gravar log: $($_.Exception.Message)" -ErrorAction Continue
+    }
 }
 
 function Remove-PathsIfExist {
+    [CmdletBinding(SupportsShouldProcess)]
     param ([string[]]$Paths)
     foreach ($p in $Paths) {
         if ($p -and (Test-Path $p)) {
-            Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+            if ($PSCmdlet.ShouldProcess($p, "Remove")) {
+                Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }
@@ -84,7 +89,7 @@ Write-Log "========================================================"
 $ProgressActivity = "WinProvision - Instalacao de Softwares"
 Write-Progress -Activity $ProgressActivity -Status "Verificando WinGet..." -PercentComplete 0
 
-function Get-GitHubLatestAssets {
+function Get-GitHubLatestAsset {
     param ([string]$Repo)
     try {
         $Uri = "https://api.github.com/repos/$Repo/releases/latest"
@@ -113,7 +118,7 @@ try {
         $null = New-Item -Path $WingetTempDir -ItemType Directory -Force
 
         try {
-            $Assets = Get-GitHubLatestAssets -Repo "microsoft/winget-cli"
+            $Assets = Get-GitHubLatestAsset -Repo "microsoft/winget-cli"
             if (-not $Assets) { throw "API GitHub sem resposta." }
 
             $DepAsset    = $Assets | Where-Object { $_.name -like "*Dependencies*.zip" } | Select-Object -First 1
@@ -197,7 +202,7 @@ try {
         $null = New-Item -Path $ChocoTempDir -ItemType Directory -Force
 
         try {
-            $Assets = Get-GitHubLatestAssets -Repo "chocolatey/choco"
+            $Assets = Get-GitHubLatestAsset -Repo "chocolatey/choco"
             if (-not $Assets) { throw "API GitHub sem resposta." }
 
             $NupkgAsset = $Assets | Where-Object { $_.name -like "*.nupkg" } | Select-Object -First 1
