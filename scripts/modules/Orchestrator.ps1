@@ -383,11 +383,14 @@ $ps.Runspace = $runspace
     function Write-Log {
         param([string]$Message, [ValidateSet('INFO','WARN','ERROR')][string]$Level = 'INFO')
         $entry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')][$Level] $Message"
-        try { $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8 } catch {}
+        try { $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8 }
+        catch { Write-Error "Falha ao gravar log: $($_.Exception.Message)" -ErrorAction Continue }
     }
 
     function Set-TaskState {
+        [CmdletBinding(SupportsShouldProcess)]
         param([string]$Name, [string]$Status)
+        if (-not $PSCmdlet.ShouldProcess($Name, "Definir status para $Status")) { return }
         [System.Threading.Monitor]::Enter($Sync)
         try {
             $Sync.Status[$Name] = $Status
@@ -496,7 +499,7 @@ $timer.Add_Tick({
                 }
             }
             $pStream.Close()
-        } catch {}
+        } catch { Write-Error "Falha ao ler progresso: $($_.Exception.Message)" -ErrorAction Continue }
     }
 
     # Progresso geral = tarefas ja concluidas (peso igual entre modulos) + fracao do modulo atual
@@ -523,7 +526,7 @@ $timer.Add_Tick({
                 }
             }
             $stream.Close()
-        } catch {}
+        } catch { Write-Error "Falha ao ler log de detalhes: $($_.Exception.Message)" -ErrorAction Continue }
     }
 
     # FINALIZAÇÃO
@@ -589,7 +592,8 @@ $window.Add_Closed({
     [WinPower]::AllowSleep()
     $timer.Stop()
     if ($script:CountdownTimer) { $script:CountdownTimer.Stop() }
-    try { $ps.Stop(); $ps.Dispose(); $runspace.Close() } catch {}
+    try { $ps.Stop(); $ps.Dispose(); $runspace.Close() }
+    catch { Write-Error "Falha ao finalizar runspace: $($_.Exception.Message)" -ErrorAction Continue }
 })
 
 # ============================
