@@ -6,7 +6,7 @@
     Módulo autônomo e integrado ao WinProvision Orchestrator. Baixa e executa
     o Microsoft Activation Scripts em modo não-interativo (/Ohook).
 .NOTES
-    Versão : 1.9.0 (Invoke-WebRequest, TLS Strict, Progress Tracking & Clean Error Logging)
+    Versão : 1.9.1 (Linting Fixes - PSScriptAnalyzer Compliance)
 #>
 [CmdletBinding()]
 param(
@@ -43,11 +43,13 @@ function Write-Log {
     $line = "[$ts][$Level] [MAS/$Mode] $Msg"
     try {
         Add-Content -Path $LogPath -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
-    } catch {}
+    } catch {
+        $null = $_
+    }
     Write-Host $line
 }
 
-function Manage-DefenderExclusion {
+function Set-DefenderExclusion {
     param([bool]$Add)
     try {
         if ($Add) {
@@ -72,10 +74,10 @@ try {
     if (Test-Path -Path $WorkingDir) { Remove-Item -Path $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue }
     $null = New-Item -Path $WorkingDir -ItemType Directory -Force
 
-    Manage-DefenderExclusion -Add $true
+    Set-DefenderExclusion -Add $true
 
     Write-Log "[PROGRESS] 30%" "INFO"
-    
+
     $DownloadSuccess = $false
     $Headers = @{
         "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) WinProvision"
@@ -143,7 +145,7 @@ try {
     exit 1
 } finally {
     # Garante a limpeza do ambiente e exclusões do Defender independentemente de exceções
-    Manage-DefenderExclusion -Add $false
+    Set-DefenderExclusion -Add $false
     if (Test-Path -Path $WorkingDir) {
         Remove-Item -Path $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
     }
