@@ -359,6 +359,7 @@ function Expand-ZipFast {
 
 function New-DownloadRunspacePool {
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([System.Management.Automation.Runspaces.RunspacePool])]
     param ([int]$MaxRunspaces)
 
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
