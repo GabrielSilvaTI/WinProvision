@@ -9,30 +9,9 @@
       "ManagerName": "winget"
     },
     {
-      "Id": "HydraLauncher.Hydra",
-      "Name": "Hydra",
-      "Version": "4.1.0",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "LocalSend.LocalSend",
-      "Name": "LocalSend",
-      "Version": "1.17.0",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "RARLab.WinRAR",
-      "Name": "WinRAR",
-      "Version": "7.23.0",
-      "Source": "winget",
-      "ManagerName": "winget"
-    },
-    {
-      "Id": "Valve.Steam",
-      "Name": "Steam",
-      "Version": "2.10.91.91",
+      "Id": "VideoLAN.VLC",
+      "Name": "VLC media player",
+      "Version": "3.0.23",
       "Source": "winget",
       "ManagerName": "winget"
     }
