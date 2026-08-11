@@ -47,8 +47,12 @@ function Write-Log {
         Write-Host " $Message" -ForegroundColor $color
         Add-Content -Path $LogPath -Value $FormattedLine -Encoding UTF8 -ErrorAction SilentlyContinue
     } finally {
-        if ($lockAcquired -and $logMutex) { try { $logMutex.ReleaseMutex() } catch {} }
-        if ($logMutex) { try { $logMutex.Dispose() } catch {} }
+        if ($lockAcquired -and $logMutex) {
+            try { $logMutex.ReleaseMutex() } catch { Write-Error -ErrorAction Continue -Message "Falha ao liberar logMutex: $_" }
+        }
+        if ($logMutex) {
+            try { $logMutex.Dispose() } catch { Write-Error -ErrorAction Continue -Message "Falha ao descartar logMutex: $_" }
+        }
     }
 }
 
@@ -354,6 +358,7 @@ function Expand-ZipFast {
 }
 
 function New-DownloadRunspacePool {
+    [CmdletBinding(SupportsShouldProcess)]
     param ([int]$MaxRunspaces)
 
     $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
@@ -374,11 +379,13 @@ function New-DownloadRunspacePool {
     $iss.Variables.Add((New-Object System.Management.Automation.Runspaces.SessionStateVariableEntry('LogPath', $LogPath, $null)))
 
     $pool = [runspacefactory]::CreateRunspacePool(1, [Math]::Max(1, $MaxRunspaces), $iss, $Host)
-    $pool.Open()
+    if ($PSCmdlet.ShouldProcess("Pool de Runspaces", "Abrir")) {
+        $pool.Open()
+    }
     return $pool
 }
 
-function Invoke-ParallelDownloads {
+function Invoke-ParallelDownload {
     param(
         [hashtable[]]$DownloadTasks
     )
@@ -484,6 +491,8 @@ $WingetExtractDir = Join-Path $TempRoot 'WingetBootstrap'
 $ChocoExtractDir  = Join-Path $TempRoot 'ChocoBootstrap'
 
 function Update-PathFromRegistry {
+    [CmdletBinding(SupportsShouldProcess)]
+    param ()
     try {
         $machinePath = [Microsoft.Win32.Registry]::GetValue('HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', $null)
         $userPath = [Microsoft.Win32.Registry]::GetValue('HKEY_CURRENT_USER\Environment', 'Path', $null)
@@ -491,8 +500,10 @@ function Update-PathFromRegistry {
         if ($machinePath) { $paths += $machinePath -split ';' }
         if ($userPath) { $paths += $userPath -split ';' }
         $uniquePaths = $paths | Where-Object { $_ -and $_.Trim() } | Select-Object -Unique
-        $env:Path = ($uniquePaths -join ';')
-        Write-Log "PATH atualizado a partir do registro." "DEBUG"
+        if ($PSCmdlet.ShouldProcess("Env:Path", "Atualizar a partir do registro")) {
+            $env:Path = ($uniquePaths -join ';')
+            Write-Log "PATH atualizado a partir do registro." "DEBUG"
+        }
     } catch {
         Write-Log "Falha ao atualizar PATH: $_" "WARN"
     }
@@ -524,7 +535,7 @@ try {
                     @{ Url = $DepAsset.browser_download_url; Destination = $DepZipPath },
                     @{ Url = $BundleAsset.browser_download_url; Destination = $BundlePath }
                 )
-                $results = Invoke-ParallelDownloads -DownloadTasks $downloadTasks
+                $results = Invoke-ParallelDownload -DownloadTasks $downloadTasks
 
                 if ($results[$DepZipPath] -and $results[$BundlePath]) {
                     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -850,10 +861,10 @@ Write-Log "========================================================" "INFO"
 }
 finally {
     if ($AcquiredMutex -and $Mutex) {
-        try { $Mutex.ReleaseMutex() } catch {}
+        try { $Mutex.ReleaseMutex() } catch { Write-Error -ErrorAction Continue -Message "Falha ao liberar Mutex: $_" }
     }
     if ($Mutex) {
-        try { $Mutex.Dispose() } catch {}
+        try { $Mutex.Dispose() } catch { Write-Error -ErrorAction Continue -Message "Falha ao descartar Mutex: $_" }
     }
 }
 
