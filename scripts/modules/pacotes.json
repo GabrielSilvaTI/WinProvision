@@ -4,7 +4,28 @@
     {
       "Id": "Google.Chrome",
       "Name": "Google Chrome",
-      "Version": "151.0.7922.109",
+      "Version": "151.0.7922.138",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "Nlitesoft.NTLite",
+      "Name": "NTLite",
+      "Version": "2026.07.11258",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "Opera.OperaGX",
+      "Name": "Opera GX Stable",
+      "Version": "134.0.5954.44",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "RARLab.WinRAR",
+      "Name": "WinRAR",
+      "Version": "7.23.0",
       "Source": "winget",
       "ManagerName": "winget"
     },
