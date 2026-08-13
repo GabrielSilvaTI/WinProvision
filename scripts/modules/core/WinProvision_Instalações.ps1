@@ -18,7 +18,7 @@ using namespace System.IO
 
 # ========== CONFIGURAÇÕES ==========
 
-$jsonUrl      = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/core/Programas.json'
+$jsonUrl      = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/scripts/modules/core/WinProvision_Programas.json'
 $tempDir      = [Path]::Combine($env:TEMP, 'WinProvision')
 $jsonFile     = [Path]::Combine($tempDir, 'Programas.json')
 $logFile      = [Path]::Combine($tempDir, 'winget-idempotente.log')
