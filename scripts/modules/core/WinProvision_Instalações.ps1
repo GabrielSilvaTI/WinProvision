@@ -92,6 +92,7 @@ function Install-App {
 
 function Update-App {
     [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([hashtable])]
     param([Parameter(Mandatory)][string]$Id)
 
     if (-not $PSCmdlet.ShouldProcess($Id, 'winget upgrade')) {
