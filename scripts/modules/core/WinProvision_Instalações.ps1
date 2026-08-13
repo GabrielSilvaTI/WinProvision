@@ -25,7 +25,6 @@ $logFile      = [Path]::Combine($tempDir, 'winget-idempotente.log')
 
 # Códigos de retorno do winget relevantes para este fluxo
 # Fonte: https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md
-$WINGET_ERROR_NO_APPLICATIONS_FOUND     = -1978335212  # 0x8A150014 - não instalado
 $WINGET_ERROR_UPDATE_NOT_APPLICABLE     = -1978335189  # 0x8A15002B - já na última versão
 $WINGET_ERROR_PACKAGE_ALREADY_INSTALLED = -1978335135  # 0x8A150061 - install pego em corrida
 
@@ -92,7 +91,12 @@ function Install-App {
 }
 
 function Update-App {
+    [CmdletBinding(SupportsShouldProcess)]
     param([Parameter(Mandatory)][string]$Id)
+
+    if (-not $PSCmdlet.ShouldProcess($Id, 'winget upgrade')) {
+        return @{ Success = $true; Code = 0 }
+    }
 
     $output = winget upgrade --id $Id --exact --silent --source winget `
         --accept-package-agreements --accept-source-agreements `
