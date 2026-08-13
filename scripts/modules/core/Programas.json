@@ -1,0 +1,42 @@
+{
+  "export_version": 3,
+  "packages": [
+    {
+      "Id": "Google.Chrome",
+      "Name": "Google Chrome",
+      "Version": "151.0.7922.138",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "Nlitesoft.NTLite",
+      "Name": "NTLite",
+      "Version": "2026.07.11258",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "Opera.OperaGX",
+      "Name": "Opera GX Stable",
+      "Version": "134.0.5954.44",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "RARLab.WinRAR",
+      "Name": "WinRAR",
+      "Version": "7.23.0",
+      "Source": "winget",
+      "ManagerName": "winget"
+    },
+    {
+      "Id": "VideoLAN.VLC",
+      "Name": "VLC media player",
+      "Version": "3.0.23",
+      "Source": "winget",
+      "ManagerName": "winget"
+    }
+  ],
+  "incompatible_packages_info": "Incompatible packages cannot be installed from UniGetUI, either because they came from a local source (for example Local PC) or because the package manager was unavailable. Nevertheless, they have been listed here for logging purposes.",
+  "incompatible_packages": []
+}
