@@ -17,7 +17,7 @@
 #   5 = Executavel do OTP (Office Tool Plus.Console.exe) nao encontrado apos a extracao
 #   6 = Timeout aguardando a confirmacao de conclusao da instalacao (chave de registro
 #       do ClickToRun nao foi populada dentro do prazo)
-#   7 = O OTP Console encerrou mas a instalacao nao pode ser confirmada por outro motivo
+#   7 = O instalador nunca deu sinal de vida (setup/OfficeClickToRun nunca chegou a rodar)
 #   8 = Erro inesperado / nao tratado
 #   9 = Outra instancia deste script ja esta em execucao nesta maquina (mutex ocupado)
 
@@ -51,7 +51,7 @@ $EXIT_DOWNLOAD_FAILED   = 3
 $EXIT_EXTRACT_FAILED    = 4
 $EXIT_EXE_NOT_FOUND     = 5
 $EXIT_CONFIRM_TIMEOUT   = 6
-$EXIT_INSTALL_FAILED    = 7
+$EXIT_INSTALL_FAILED    = 7   # instalador nunca deu sinal de vida (setup/OfficeClickToRun nunca subiu)
 $EXIT_UNEXPECTED        = 8
 $EXIT_ALREADY_RUNNING   = 9
 
@@ -97,7 +97,7 @@ function Test-OfficeInstalled {
     return $null
 }
 
-function Clear-OTPProcesses {
+function Clear-OTPProcess {
     $ProcessesToKill = @('Office Tool Plus.Console', 'Office Tool Plus', 'setup')
     foreach ($ProcName in $ProcessesToKill) {
         Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -123,7 +123,7 @@ function Invoke-WithRetry {
     }
 }
 
-function Get-InstallHelperProcesses {
+function Get-InstallHelperProcess {
     # Apenas para feedback/log - nenhum deles isoladamente confirma inicio/fim real da instalacao.
     Get-Process -Name 'setup', 'OfficeClickToRun', 'OfficeC2RClient' -ErrorAction SilentlyContinue
 }
@@ -173,7 +173,7 @@ try {
     }
 
     Write-Step 'Limpando processos antigos...'
-    Clear-OTPProcesses
+    Clear-OTPProcess
 
     if (Test-Path -Path $TempDir) {
         Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -260,7 +260,7 @@ try {
         $InstalledAfterDeploy = Test-OfficeInstalled
         if ($InstalledAfterDeploy) { break }
 
-        $HelperProcs = Get-InstallHelperProcesses
+        $HelperProcs = Get-InstallHelperProcess
         if ($HelperProcs) { $EverSawInstallerAlive = $true }
 
         $StatusMsg = if ($HelperProcs) {
@@ -282,13 +282,18 @@ try {
         Write-Log "STDOUT do deploy:`n$OutContent"
         Write-Log "STDERR do deploy:`n$ErrContent"
 
+        if (-not $EverSawInstallerAlive) {
+            Write-ErrorMsg "O instalador nunca deu sinal de vida (setup/OfficeClickToRun nunca foi detectado em execucao). ExitCode do OTP Console: $($Process.ExitCode)."
+            exit $EXIT_INSTALL_FAILED
+        }
+
         Write-ErrorMsg "Timeout de $SetupTimeoutMin minutos atingido aguardando a conclusao da instalacao (ExitCode do OTP Console: $($Process.ExitCode))."
         exit $EXIT_CONFIRM_TIMEOUT
     }
 
     # ---------- 8. Sucesso ----------
     Write-Success "SUCESSO: Office instalado com sucesso ($InstalledAfterDeploy)!"
-    Clear-OTPProcesses
+    Clear-OTPProcess
     if (Test-Path -Path $TempDir) {
         Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -302,9 +307,13 @@ catch {
 finally {
     # Roda mesmo quando um dos `exit` acima e disparado de dentro do try:
     # garante que nenhum processo do OTP/setup fique pendurado e libera o mutex.
-    Clear-OTPProcesses
+    Clear-OTPProcess
     if ($MutexOwned -and $Mutex) {
-        try { $Mutex.ReleaseMutex() } catch { }
+        try {
+            $Mutex.ReleaseMutex()
+        } catch {
+            Write-Log "AVISO: falha ao liberar o mutex de execucao unica: $_"
+        }
     }
     if ($Mutex) { $Mutex.Dispose() }
 }
