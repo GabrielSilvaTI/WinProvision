@@ -1,6 +1,6 @@
 @{
     # Identificação do Módulo
-    ModuleVersion = '1.0.0'
+    ModuleVersion = '1.1.0'
     GUID          = 'a2c89e47-5d2b-4f90-8e12-369b0a1f72d4'
     Author        = 'Gabriel'
     CompanyName   = 'Automação'
