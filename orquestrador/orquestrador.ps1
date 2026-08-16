@@ -2,31 +2,76 @@
 
 <#
 .SYNOPSIS
-    Orchestrator autônomo para o provisionamento do Windows (Zero-Touch).
+    Orquestrador autônomo para o provisionamento do Windows (Zero-Touch).
 .DESCRIPTION
-    Suprime qualquer prompt de confirmação, barras de progresso ou interações do usuário.
+    Baixa, importa e executa sequencialmente os módulos de provisionamento
+    hospedados no repositório WinProvision. Projetado para execução 100%
+    desatendida: nenhuma barra de progresso, confirmação ou prompt é exibido.
+
+    A lista de módulos é sempre obtida do manifesto remoto (manifest.json)
+    publicado no repositório — não há lista embutida de fallback. Isso
+    significa que o manifesto é uma dependência obrigatória: se ele não
+    puder ser baixado ou estiver malformado, o provisionamento é abortado.
+
+    Para uso manual/teste, é possível ignorar o manifesto remoto passando
+    -Modules explicitamente.
+.PARAMETER BaseUrl
+    URL base (raw.githubusercontent.com) onde os módulos (.psd1/.psm1) estão hospedados.
+.PARAMETER ManifestUrl
+    URL do manifesto JSON remoto listando os módulos a executar, na ordem
+    desejada. Formato esperado: [{"Name":"Install-Winget","Function":"Install-Winget"}, ...]
+    Por padrão, é derivado de -BaseUrl.
+.PARAMETER Modules
+    Lista explícita de módulos (objetos com Name/Function). Se informada,
+    ignora o manifesto remoto — uso pensado para testes manuais.
+.PARAMETER MaxRetries
+    Número máximo de tentativas para cada requisição HTTP.
+.PARAMETER TimeoutSec
+    Timeout, em segundos, para cada requisição HTTP.
+.PARAMETER LogPath
+    Caminho do arquivo de log (transcript) da execução.
 .NOTES
-    Versão: 2.1 (Fully Automated)
+    Versão: 3.1 (Fully Automated / PowerShell 7+ / Manifesto Obrigatório)
 #>
 
 [CmdletBinding()]
-param()
+param(
+    [ValidatePattern('^https://')]
+    [string]$BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/m%C3%B3dulos/7%2B",
+
+    [ValidatePattern('^https://')]
+    [string]$ManifestUrl = "$BaseUrl/manifest.json",
+
+    [pscustomobject[]]$Modules,
+
+    [ValidateRange(1, 10)]
+    [int]$MaxRetries = 3,
+
+    [ValidateRange(5, 300)]
+    [int]$TimeoutSec = 30,
+
+    [string]$LogPath = (Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\provision.log")
+)
 
 # --- Configurações de Automação Total (Zero Interatividade) ---
-$ErrorActionPreference    = 'Stop'
-$ProgressPreference       = 'SilentlyContinue' # Desativa barras de download/progresso que travam consoles sem UI
-$ConfirmPreference        = 'None'             # Suprime qualquer confirmação do PowerShell
-$InformationPreference    = 'Continue'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue' # Desativa barras de download/progresso
+$ConfirmPreference     = 'None'             # Suprime confirmações do PowerShell
+$InformationPreference = 'Continue'
 
-# --- Configurações Locais ---
-$script:BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/m%C3%B3dulos/7%2B"
-$script:WorkDir = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\Modules"
+# Evita "mojibake" em mensagens acentuadas em sessões desatendidas
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-$script:Modules = @(
-    [pscustomobject]@{ Name = "Install-Winget";    Function = "Install-Winget" }
-    [pscustomobject]@{ Name = "Install-Programas"; Function = "Install-Programas" }
-    [pscustomobject]@{ Name = "Install-Office";    Function = "Install-Office" }
-)
+$script:BaseUrl     = $BaseUrl
+$script:ManifestUrl = $ManifestUrl
+$script:MaxRetries  = $MaxRetries
+$script:TimeoutSec  = $TimeoutSec
+$script:WorkDir     = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\Modules"
+
+# Nome de módulo só pode conter caracteres seguros para nome de arquivo/URL,
+# já que é usado para montar caminhos em disco e endpoints HTTP.
+$script:ModuleNamePattern = '^[A-Za-z0-9_-]+$'
 
 # --- Funções Auxiliares ---
 
@@ -43,35 +88,96 @@ function Write-Step {
 }
 
 function Initialize-WorkDirectory {
-    if (Test-Path -Path $script:WorkDir) {
-        Remove-Item -Path $script:WorkDir -Recurse -Force -ErrorAction SilentlyContinue -Confirm:$false
+    [CmdletBinding()]
+    param()
+    if (Test-Path -LiteralPath $script:WorkDir) {
+        Remove-Item -LiteralPath $script:WorkDir -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue
     }
     $null = New-Item -Path $script:WorkDir -ItemType Directory -Force
     Write-Step -Message "Diretório de trabalho inicializado em: $script:WorkDir" -Color Gray
 }
 
-function Download-ModuleFiles {
+function Resolve-ModuleList {
+    <#
+        Decide a lista de módulos a executar:
+        parâmetro -Modules explícito (testes) > manifesto remoto (obrigatório).
+        Não há lista embutida de fallback — se o manifesto falhar, aborta.
+    #>
     [CmdletBinding()]
+    param()
+
+    if ($script:ExplicitModules) {
+        Write-Step -Message "Usando lista de módulos informada explicitamente (-Modules)." -Color Gray
+        return $script:ExplicitModules
+    }
+
+    try {
+        Write-Step -Message "Buscando manifesto remoto: $script:ManifestUrl" -Color Gray
+        $raw = Invoke-RestMethod -Uri $script:ManifestUrl `
+            -TimeoutSec $script:TimeoutSec `
+            -MaximumRetryCount $script:MaxRetries `
+            -RetryIntervalSec 2 `
+            -ErrorAction Stop
+
+        $list = @(foreach ($item in $raw) {
+            $name = [string]$item.Name
+            $func = if ($item.PSObject.Properties['Function']) { [string]$item.Function } else { $name }
+            [pscustomobject]@{ Name = $name; Function = $func }
+        })
+
+        if ($list.Count -eq 0) {
+            throw "o manifesto remoto retornou uma lista vazia."
+        }
+
+        foreach ($m in $list) {
+            if ($m.Name -notmatch $script:ModuleNamePattern -or $m.Function -notmatch $script:ModuleNamePattern) {
+                throw "entrada inválida no manifesto: Name='$($m.Name)' Function='$($m.Function)'."
+            }
+        }
+
+        $duplicates = $list | Group-Object -Property Name | Where-Object { $_.Count -gt 1 }
+        if ($duplicates) {
+            $dupNames = ($duplicates | ForEach-Object { $_.Name }) -join ', '
+            throw "o manifesto contém módulo(s) duplicado(s): $dupNames."
+        }
+
+        Write-Step -Message "Manifesto remoto carregado com $($list.Count) módulo(s)." -Color Gray
+        return $list
+    }
+    catch {
+        # Sem fallback: o manifesto é obrigatório, então propaga o erro para
+        # abortar o provisionamento com uma mensagem clara.
+        throw "Não foi possível carregar o manifesto remoto ($script:ManifestUrl): $($_.Exception.Message)"
+    }
+}
+
+function Save-ModuleFiles {
+    [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9_-]+$')]
         [string]$ModuleName
     )
     $moduleDir = Join-Path $script:WorkDir $ModuleName
     $null = New-Item -Path $moduleDir -ItemType Directory -Force
 
-    $extensions = @("psd1", "psm1")
-    foreach ($ext in $extensions) {
+    foreach ($ext in @("psd1", "psm1")) {
         $url  = "$($script:BaseUrl)/$ModuleName.$ext"
         $dest = Join-Path $moduleDir "$ModuleName.$ext"
-        
+
         Write-Step -Message "Baixando: $ModuleName.$ext ..." -Color Gray
-        
+
         try {
-            Invoke-RestMethod -Uri $url -OutFile $dest -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -ErrorAction Stop
+            Invoke-RestMethod -Uri $url -OutFile $dest `
+                -UserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" `
+                -TimeoutSec $script:TimeoutSec `
+                -MaximumRetryCount $script:MaxRetries `
+                -RetryIntervalSec 2 `
+                -ErrorAction Stop
         }
         catch {
-            Write-Step -Message "Falha ao baixar $ModuleName.$ext : $_" -Color Red
-            throw
+            throw "Falha ao baixar $ModuleName.$ext : $($_.Exception.Message)"
         }
     }
     return $moduleDir
@@ -86,8 +192,15 @@ function Import-ModuleFromTemp {
     $moduleDir = Join-Path $script:WorkDir $ModuleName
     $psd1 = Join-Path $moduleDir "$ModuleName.psd1"
 
-    if (-not (Test-Path -Path $psd1)) {
+    if (-not (Test-Path -LiteralPath $psd1)) {
         throw "Arquivo de manifesto '$psd1' não foi encontrado."
+    }
+
+    try {
+        $null = Test-ModuleManifest -Path $psd1 -ErrorAction Stop
+    }
+    catch {
+        throw "Manifesto de módulo inválido para '$ModuleName': $($_.Exception.Message)"
     }
 
     Write-Step -Message "Importando módulo: $ModuleName ..." -Color Gray
@@ -108,6 +221,7 @@ function Test-FunctionExists {
 
 function Invoke-ModuleFunction {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)]
         [string]$ModuleName,
@@ -121,18 +235,16 @@ function Invoke-ModuleFunction {
     try {
         $result = & $FunctionName
 
+        # Contrato de retorno esperado dos módulos: $null (sucesso implícito),
+        # [bool], ou objeto/hashtable com propriedade 'Success'. Qualquer outro
+        # tipo de retorno é tratado como falha — o módulo deve declarar
+        # explicitamente seu status.
         $isSuccess = $false
-        if ($null -eq $result) {
-            $isSuccess = $true
-        }
-        elseif ($result -is [bool]) {
-            $isSuccess = $result
-        }
-        elseif ($result -is [hashtable] -and $result.ContainsKey('Success')) {
-            $isSuccess = [bool]$result['Success']
-        }
-        elseif ($result -is [PSCustomObject] -and $result.PSObject.Properties['Success']) {
-            $isSuccess = [bool]$result.Success
+        switch ($true) {
+            { $null -eq $result } { $isSuccess = $true; break }
+            { $result -is [bool] } { $isSuccess = $result; break }
+            { $result -is [hashtable] -and $result.ContainsKey('Success') } { $isSuccess = [bool]$result['Success']; break }
+            { $result -is [pscustomobject] -and $result.PSObject.Properties['Success'] } { $isSuccess = [bool]$result.Success; break }
         }
 
         if ($isSuccess) {
@@ -144,19 +256,21 @@ function Invoke-ModuleFunction {
         return $false
     }
     catch {
-        Write-Step -Message "[EXCEÇÃO] Erro ao executar $ModuleName : $_" -Color Red
+        Write-Step -Message "[EXCEÇÃO] Erro ao executar $ModuleName : $($_.Exception.Message)" -Color Red
         return $false
     }
 }
 
 function Remove-WorkDirectory {
-    if (Test-Path -Path $script:WorkDir) {
+    [CmdletBinding()]
+    param()
+    if (Test-Path -LiteralPath $script:WorkDir) {
         try {
-            Remove-Item -Path $script:WorkDir -Recurse -Force -Confirm:$false -ErrorAction Stop
+            Remove-Item -LiteralPath $script:WorkDir -Recurse -Force -Confirm:$false -ErrorAction Stop
             Write-Step -Message "Limpeza: Arquivos temporários removidos." -Color Gray
         }
         catch {
-            Write-Step -Message "Aviso: Não foi possível limpar a pasta temporária: $_" -Color Yellow
+            Write-Step -Message "Aviso: Não foi possível limpar a pasta temporária: $($_.Exception.Message)" -Color Yellow
         }
     }
 }
@@ -164,29 +278,48 @@ function Remove-WorkDirectory {
 # --- Execução Principal ---
 
 function Start-Provision {
+    [CmdletBinding()]
+    param()
+
+    $transcriptStarted = $false
+    try {
+        $logDir = Split-Path -Path $LogPath -Parent
+        if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+            $null = New-Item -Path $logDir -ItemType Directory -Force
+        }
+        Start-Transcript -Path $LogPath -Append -ErrorAction Stop | Out-Null
+        $transcriptStarted = $true
+    }
+    catch {
+        Write-Step -Message "Aviso: não foi possível iniciar o log em '$LogPath': $($_.Exception.Message)" -Color Yellow
+    }
+
     Write-Step -Message "============================================" -Color White
     Write-Step -Message "   ORQUESTRADOR DE PROVISIONAMENTO (ZERO-TOUCH)" -Color White
     Write-Step -Message "============================================" -Color White
 
     $overallSuccess = $true
     $failedModule   = $null
+    $exitCode       = 0
 
     try {
         Initialize-WorkDirectory
+        $moduleList = Resolve-ModuleList
+        $total = $moduleList.Count
 
-        $total = $script:Modules.Count
         for ($i = 0; $i -lt $total; $i++) {
-            $mod          = $script:Modules[$i]
+            $mod          = $moduleList[$i]
             $moduleName   = $mod.Name
             $functionName = $mod.Function
             $stepNumber   = $i + 1
 
             try {
-                Download-ModuleFiles -ModuleName $moduleName
+                Save-ModuleFiles -ModuleName $moduleName | Out-Null
                 Import-ModuleFromTemp -ModuleName $moduleName
                 Test-FunctionExists -FunctionName $functionName
 
-                $success = Invoke-ModuleFunction -ModuleName $moduleName -FunctionName $functionName -StepNumber $stepNumber -TotalSteps $total
+                $success = Invoke-ModuleFunction -ModuleName $moduleName -FunctionName $functionName `
+                    -StepNumber $stepNumber -TotalSteps $total
 
                 if (-not $success) {
                     $overallSuccess = $false
@@ -195,12 +328,17 @@ function Start-Provision {
                 }
             }
             catch {
-                Write-Step -Message "[FALHA CRÍTICA] Módulo $moduleName : $_" -Color Red
+                Write-Step -Message "[FALHA CRÍTICA] Módulo $moduleName : $($_.Exception.Message)" -Color Red
                 $overallSuccess = $false
                 $failedModule   = $moduleName
                 break
             }
         }
+    }
+    catch {
+        Write-Step -Message "[FALHA CRÍTICA] Erro na inicialização do orquestrador: $($_.Exception.Message)" -Color Red
+        $overallSuccess = $false
+        $failedModule   = "<inicialização>"
     }
     finally {
         Write-Step -Message "============================================" -Color White
@@ -210,15 +348,22 @@ function Start-Provision {
     if ($overallSuccess) {
         Write-Step -Message "Provisionamento concluído com sucesso." -Color Green
         Write-Step -Message "============================================" -Color White
-        [Environment]::Exit(0)
+        $exitCode = 0
     }
     else {
         Write-Step -Message "Orquestrador interrompido devido a falhas." -Color Red
         Write-Step -Message "Módulo com falha: $failedModule" -Color Red
         Write-Step -Message "============================================" -Color White
-        [Environment]::Exit(1)
+        $exitCode = 1
     }
+
+    if ($transcriptStarted) {
+        try { Stop-Transcript | Out-Null } catch { }
+    }
+
+    exit $exitCode
 }
 
-# Inicia a execução imediatamente e encerra o processo do shell ao concluir
+# Inicia a execução imediatamente.
+$script:ExplicitModules = $Modules
 Start-Provision
