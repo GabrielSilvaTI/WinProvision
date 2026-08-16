@@ -3,6 +3,9 @@
 using namespace System.IO
 
 Set-StrictMode -Version Latest
+# Funções de módulo NÃO herdam $ErrorActionPreference do script/orquestrador
+# que as importa — precisa ser declarado aqui também.
+$ErrorActionPreference = 'Stop'
 
 <#
 .SYNOPSIS
@@ -50,6 +53,18 @@ function Write-WinProvisionLog {
         'ERRO' { Write-Host "[ERRO] $Message" -ForegroundColor Red }
         'INFO' { Write-Verbose $Message }
     }
+}
+
+function Test-WingetAvailable {
+    <#
+    .SYNOPSIS
+        Verifica se o executável winget está disponível no PATH da sessão atual.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    return [bool](Get-Command -Name winget -CommandType Application -ErrorAction SilentlyContinue)
 }
 
 function Test-AppInstalled {
@@ -154,7 +169,9 @@ function Install-Programas {
     .EXAMPLE
         Install-Programas -JsonUrl 'https://exemplo.com/programas.json'
     .OUTPUTS
-        System.Management.Automation.PSCustomObject
+        System.Management.Automation.PSCustomObject com as propriedades:
+        Success (bool), TotalCount (int), FailedCount (int), LogFile (string),
+        Results (lista com o detalhe de cada pacote processado).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -173,6 +190,12 @@ function Install-Programas {
 
     if (-not (Test-Path -Path $TempDir)) {
         $null = New-Item -ItemType Directory -Path $TempDir -Force
+    }
+
+    # 0. Pré-requisito: winget precisa estar disponível
+    if (-not (Test-WingetAvailable)) {
+        Write-WinProvisionLog -Message 'winget não encontrado no PATH. Verifique se o módulo Install-Winget foi executado antes deste.' -LogFile $logFile -Level ERRO
+        throw [System.InvalidOperationException]::new('winget não está disponível no PATH desta sessão.')
     }
 
     # 1. Download do JSON
@@ -241,7 +264,7 @@ function Install-Programas {
     Write-WinProvisionLog -Message 'RELATÓRIO FINAL' -LogFile $logFile -Level STEP
     Write-Host ('=' * 50) -ForegroundColor Cyan
 
-    $failed = $results | Where-Object Status -eq 'FALHA'
+    $failed = @($results | Where-Object Status -eq 'FALHA')
 
     if (-not $failed) {
         Write-Host 'TODOS OS PACOTES FORAM PROCESSADOS COM SUCESSO!' -ForegroundColor Green
@@ -257,8 +280,16 @@ function Install-Programas {
         Write-Host ('=' * 50) -ForegroundColor Cyan
     }
 
-    # Retorna o objeto de resultados estruturado para o pipeline do PowerShell
-    return $results
+    # Retorna UM ÚNICO pscustomobject com a propriedade 'Success', que é o
+    # contrato exigido pelo Orquestrador (Invoke-ModuleFunction). O detalhe
+    # por pacote continua disponível em .Results para diagnóstico/log.
+    return [pscustomobject]@{
+        Success     = ($failed.Count -eq 0)
+        TotalCount  = $results.Count
+        FailedCount = $failed.Count
+        LogFile     = $logFile
+        Results     = $results
+    }
 }
 
 #endregion
