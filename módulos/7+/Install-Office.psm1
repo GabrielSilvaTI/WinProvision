@@ -7,6 +7,13 @@ using namespace System.IO
 
 Set-StrictMode -Version Latest
 
+# Funções dentro de um módulo (.psm1) não herdam $ErrorActionPreference /
+# $ProgressPreference do escopo do script chamador (Orquestrador) — usam o
+# escopo do próprio módulo, que por padrão é 'Continue'. Definidas aqui,
+# valem para todo o módulo, consistente com Install-Winget/Install-Programas.
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
+
 <#
 .SYNOPSIS
     Módulo para instalação autônoma e gerenciamento do Microsoft Office via Office Tool Plus (OTP).
@@ -125,7 +132,14 @@ function Install-Office {
     .PARAMETER Architecture
         Arquitetura do Office (32 ou 64).
     .PARAMETER SetupTimeoutMin
-        Tempo máximo em minutos para aguardar a conclusão da instalação.
+        Tempo máximo em minutos para aguardar a conclusão da instalação do Office
+        (após o OTP Console ter sido iniciado).
+    .PARAMETER MaxRetries
+        Número máximo de tentativas para cada requisição HTTP (consulta à API e download).
+    .PARAMETER TimeoutSec
+        Timeout, em segundos, para a consulta à API do GitHub.
+    .PARAMETER DownloadTimeoutSec
+        Timeout, em segundos, para o download do pacote do Office Tool Plus.
     .EXAMPLE
         Import-Module .\Install-Office.psd1
         Install-Office
@@ -151,10 +165,20 @@ function Install-Office {
 
         [Parameter()]
         [ValidateRange(1, 1440)]
-        [int]$SetupTimeoutMin = 60
-    )
+        [int]$SetupTimeoutMin = 60,
 
-    $ProgressPreference = 'SilentlyContinue'
+        [Parameter()]
+        [ValidateRange(1, 10)]
+        [int]$MaxRetries = 3,
+
+        [Parameter()]
+        [ValidateRange(5, 300)]
+        [int]$TimeoutSec = 30,
+
+        [Parameter()]
+        [ValidateRange(30, 900)]
+        [int]$DownloadTimeoutSec = 180
+    )
 
     $otpApiUrl = 'https://api.github.com/repos/YerongAI/Office-Tool/releases/latest'
     $tempDir = Join-Path -Path $env:SystemRoot -ChildPath 'Temp\OTP_Provisioning'
@@ -234,7 +258,10 @@ function Install-Office {
         # 2. Consulta à API do GitHub
         Write-OfficeInstallLog @logParams -Message 'Consultando API do GitHub para obter a versão mais recente...' -Level STEP
         try {
-            $releaseInfo = Invoke-RestMethod -Uri $otpApiUrl -Headers $headers -TimeoutSec 30
+            $releaseInfo = Invoke-RestMethod -Uri $otpApiUrl -Headers $headers `
+                -TimeoutSec $TimeoutSec `
+                -MaximumRetryCount $MaxRetries `
+                -RetryIntervalSec 2
         }
         catch {
             Write-OfficeInstallLog @logParams -Message "Falha ao consultar API do GitHub: $_" -Level ERRO
@@ -250,7 +277,10 @@ function Install-Office {
         # 3. Download
         Write-OfficeInstallLog @logParams -Message "Baixando Office Tool Plus ($($releaseInfo.tag_name))..." -Level STEP
         try {
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipFile -Headers $headers -TimeoutSec 180
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipFile -Headers $headers `
+                -TimeoutSec $DownloadTimeoutSec `
+                -MaximumRetryCount $MaxRetries `
+                -RetryIntervalSec 2
 
             $downloadedFile = Get-Item -Path $zipFile -ErrorAction SilentlyContinue
             if (-not $downloadedFile -or $downloadedFile.Length -eq 0) {
