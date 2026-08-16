@@ -3,6 +3,12 @@
 using namespace System.Security.Principal
 
 Set-StrictMode -Version Latest
+# Funções de módulo NÃO herdam preferências do script/orquestrador que as
+# importa — precisam ser declaradas aqui também. Não cobre runspaces de
+# ForEach-Object -Parallel, que recebem estado próprio (ver comentário
+# no bloco de download).
+$ErrorActionPreference = 'Stop'
+$ProgressPreference    = 'SilentlyContinue'
 
 <#
 .SYNOPSIS
@@ -22,7 +28,7 @@ function Test-WingetInstalled {
     [OutputType([bool])]
     param()
 
-    $cmd = Get-Command -Name 'winget.exe' -ErrorAction SilentlyContinue
+    $cmd = Get-Command -Name 'winget.exe' -CommandType Application -ErrorAction SilentlyContinue
     $pkg = Get-AppxPackage -Name 'Microsoft.DesktopAppInstaller' -ErrorAction SilentlyContinue
 
     return [bool]($cmd -and $pkg)
@@ -42,6 +48,10 @@ function Install-Winget {
         sistema operacional, e instala ambos via Add-AppxPackage.
     .PARAMETER Force
         Força o download e a reinstalação mesmo que o winget já esteja instalado e ativo.
+    .PARAMETER TimeoutSec
+        Timeout, em segundos, para cada requisição HTTP (consulta ao GitHub e downloads).
+    .PARAMETER MaxRetries
+        Número máximo de tentativas para cada requisição HTTP.
     .EXAMPLE
         Install-Winget -Verbose
     .EXAMPLE
@@ -53,11 +63,14 @@ function Install-Winget {
     [OutputType([bool])]
     param(
         [Parameter()]
-        [switch]$Force
-    )
+        [switch]$Force,
 
-    $ErrorActionPreference = 'Stop'
-    $ProgressPreference = 'SilentlyContinue'
+        [ValidateRange(5, 300)]
+        [int]$TimeoutSec = 30,
+
+        [ValidateRange(1, 10)]
+        [int]$MaxRetries = 3
+    )
 
     # 1. Validação de privilégios administrativos
     $principal = [WindowsPrincipal]::new([WindowsIdentity]::GetCurrent())
@@ -86,7 +99,12 @@ function Install-Winget {
             'User-Agent' = 'PowerShell-Winget-Installer'
             'Accept'     = 'application/vnd.github+json'
         }
-        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -Headers $ghHeaders
+        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' `
+            -Headers $ghHeaders `
+            -TimeoutSec $TimeoutSec `
+            -MaximumRetryCount $MaxRetries `
+            -RetryIntervalSec 2 `
+            -ErrorAction Stop
 
         $depsZipUrl = ($release.assets | Where-Object Name -like '*Dependencies.zip' | Select-Object -First 1).browser_download_url
         $msixBundleUrl = ($release.assets | Where-Object Name -like '*.msixbundle' | Select-Object -First 1).browser_download_url
@@ -110,9 +128,18 @@ function Install-Winget {
 
     try {
         # 6. Download em paralelo
+        # ForEach-Object -Parallel roda cada item em um runspace isolado, que
+        # NÃO herda $ErrorActionPreference/$ProgressPreference do escopo
+        # externo — por isso tudo precisa ser explícito aqui, incluindo as
+        # variáveis capturadas via $using:.
         Write-Host 'Baixando dependências e winget...' -ForegroundColor Cyan
         $downloads | ForEach-Object -Parallel {
-            Invoke-WebRequest -Uri $_.Uri -OutFile $_.Out
+            Invoke-WebRequest -Uri $_.Uri -OutFile $_.Out `
+                -TimeoutSec $using:TimeoutSec `
+                -MaximumRetryCount $using:MaxRetries `
+                -RetryIntervalSec 2 `
+                -ProgressAction SilentlyContinue `
+                -ErrorAction Stop
         } -ThrottleLimit 2
 
         foreach ($download in $downloads) {
