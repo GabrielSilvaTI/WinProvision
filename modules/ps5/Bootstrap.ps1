@@ -14,10 +14,12 @@
          que o PowerShell 7+ esteja instalado na máquina.
       3. Delega a execução para o Orquestrador (PowerShell 7+) invocando 'pwsh.exe'
          diretamente — nunca 'powershell.exe', já que o Orquestrador usa sintaxe
-         exclusiva do PS7+ que falha silenciosamente em Windows PowerShell 5.1 — e sem
-         '-Wait', para não travar o FirstLogonCommands/UserOnce enquanto o Orquestrador
-         roda (a área de trabalho aparece normalmente; o Orquestrador segue rodando em
-         segundo plano na mesma sessão interativa, com sua própria UI visível).
+         exclusiva do PS7+ que falha silenciosamente em Windows PowerShell 5.1.
+
+    FirstLogonCommands (unattend.xml) executa na Sessão 1, com o usuário já vendo a Área
+    de Trabalho. O comando de disparo é o Unattend-x.cmd gerado pelo Schneegans, chamado
+    a partir da aba FirstLogon com uma linha 'irm | iex'. Como a sessão já é interativa,
+    Start-Process direto para o pwsh é suficiente para o Orquestrador aparecer na tela.
 
     Não depende de sintaxes exclusivas do PowerShell 7+ (operador ternário, operador de
     coalescência nula, ForEach-Object -Parallel, -MaximumRetryCount em Invoke-WebRequest, etc.),
@@ -37,13 +39,13 @@
 .PARAMETER LogPath
     Caminho do arquivo de log (transcript) da execução.
 .NOTES
-    Versão: 2.0.0 (PowerShell 5.1 / Ponto de Entrada Zero-Touch — delegação via Scheduled Task)
+    Versão: 2.2.0 (PowerShell 5.1 / Ponto de Entrada Zero-Touch)
 #>
 
 [CmdletBinding()]
 param(
     [ValidatePattern('^https://')]
-    [string]$ModuleBaseUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/m%C3%B3dulos/5.1',
+    [string]$ModuleBaseUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/modules/ps5',
 
     [ValidatePattern('^https://')]
     [string]$BootstrapUrl = "$ModuleBaseUrl/Bootstrap.ps1",
@@ -100,6 +102,13 @@ function Write-Step {
     Write-Host "[$timestamp] $Message" -ForegroundColor $Color
 }
 
+function Test-IsSystemAccount {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+    return ([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq 'S-1-5-18')
+}
+
 function Test-IsElevated {
     <#
     .SYNOPSIS
@@ -116,12 +125,11 @@ function Test-IsElevated {
     [OutputType([bool])]
     param()
 
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-
-    if ($identity.User.Value -eq 'S-1-5-18') {
+    if (Test-IsSystemAccount) {
         return $true
     }
 
+    $identity  = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object -TypeName System.Security.Principal.WindowsPrincipal -ArgumentList $identity
     return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 }
@@ -341,23 +349,24 @@ function Start-Bootstrap {
 
         Write-Step -Message '[OK] PowerShell 7+ garantido nesta máquina.' -Color Green
 
-        # 4. Delega ao Orquestrador via pwsh (nunca powershell.exe). Sem '-Wait': o
-        #    FirstLogonCommands/UserOnce roda na Sessão 1 (interativa) neste ambiente,
-        #    então não há isolamento de sessão a contornar — só o bloqueio síncrono,
-        #    que impediria a área de trabalho de aparecer até o Orquestrador terminar.
+        # 4. Delega ao Orquestrador via pwsh (nunca powershell.exe). Sem '-Wait': não
+        #    bloqueia o FirstLogonCommands enquanto o Orquestrador roda. FirstLogonCommands
+        #    já executa interativamente na Sessão 1, com a Área de Trabalho visível, então
+        #    Start-Process direto é suficiente — sem necessidade de Tarefa Agendada.
         $pwshExe = Resolve-PwshPath
         if (-not $pwshExe) {
             throw 'PowerShell 7+ foi instalado, mas o executável pwsh.exe não pôde ser localizado.'
         }
+
+        $orchestratorCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$OrchestratorUrl' -TimeoutSec $TimeoutSec -MaximumRetryCount $MaxRetries -RetryIntervalSec 2)"
+        $pwshArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"$orchestratorCmd`""
 
         Write-Step -Message "Delegando execução para o Orquestrador via pwsh (sem aguardar): $pwshExe" -Color Cyan
         Write-Step -Message '============================================' -Color White
 
         if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { }; $transcriptStarted = $false }
 
-        # A partir daqui, sintaxe é do PS7+ (executada dentro do pwsh, não desta sessão 5.1).
-        $orchestratorCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$OrchestratorUrl' -TimeoutSec $TimeoutSec -MaximumRetryCount $MaxRetries -RetryIntervalSec 2)"
-        $null = Start-Process -FilePath $pwshExe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $orchestratorCmd) -PassThru -ErrorAction Stop
+        $null = Start-Process -FilePath $pwshExe -ArgumentList $pwshArgs -PassThru -ErrorAction Stop
 
         $exitCode = 0
     }
