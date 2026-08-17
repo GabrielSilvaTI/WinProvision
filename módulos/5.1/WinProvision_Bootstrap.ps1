@@ -12,21 +12,12 @@
          funcionando tanto executado como arquivo local quanto via 'iwr | iex'.
       2. Baixa e importa o módulo Install-PowerShell7 (compatível com PS 5.1) e garante
          que o PowerShell 7+ esteja instalado na máquina.
-      3. Registra (ou atualiza) uma Scheduled Task que invoca o Orquestrador (PowerShell 7+)
-         via 'pwsh.exe' — nunca 'powershell.exe', já que o Orquestrador usa sintaxe
-         exclusiva do PS7+ que falha silenciosamente em Windows PowerShell 5.1 — e dispara
-         essa task imediatamente para a sessão atual.
-
-    Por que Scheduled Task em vez de invocar o pwsh diretamente com -Wait:
-      Quando disparado via FirstLogonCommands/UserOnce, o Bootstrap frequentemente roda
-      como SYSTEM, em Sessão 0 — isolada da sessão interativa do usuário. Um processo
-      lançado diretamente ali nunca conseguiria desenhar UI na tela do usuário, e
-      esperar (-Wait) o Orquestrador inteiro terminar travaria o primeiro logon (a área
-      de trabalho só apareceria depois de todos os módulos rodarem). Registrar uma
-      Scheduled Task com LogonType Interactive, disparando-a manualmente na sessão do
-      usuário que acabou de logar, resolve os dois problemas: o Bootstrap encerra rápido
-      (a área de trabalho aparece normalmente) e o Orquestrador roda na sessão certa,
-      onde uma UI (ex.: WPF) poderá aparecer.
+      3. Delega a execução para o Orquestrador (PowerShell 7+) invocando 'pwsh.exe'
+         diretamente — nunca 'powershell.exe', já que o Orquestrador usa sintaxe
+         exclusiva do PS7+ que falha silenciosamente em Windows PowerShell 5.1 — e sem
+         '-Wait', para não travar o FirstLogonCommands/UserOnce enquanto o Orquestrador
+         roda (a área de trabalho aparece normalmente; o Orquestrador segue rodando em
+         segundo plano na mesma sessão interativa, com sua própria UI visível).
 
     Não depende de sintaxes exclusivas do PowerShell 7+ (operador ternário, operador de
     coalescência nula, ForEach-Object -Parallel, -MaximumRetryCount em Invoke-WebRequest, etc.),
@@ -39,9 +30,6 @@
     derivada de -ModuleBaseUrl (mesma pasta).
 .PARAMETER OrchestratorUrl
     URL raw do script Orquestrador (PowerShell 7+) a ser executado após garantir o pwsh.
-.PARAMETER TaskName
-    Nome da Scheduled Task que dispara o Orquestrador. Fica registrada permanentemente
-    no sistema (não se auto-remove), para permitir reexecução/depuração posterior.
 .PARAMETER MaxRetries
     Número máximo de tentativas para cada requisição HTTP.
 .PARAMETER TimeoutSec
@@ -62,9 +50,6 @@ param(
 
     [ValidatePattern('^https://')]
     [string]$OrchestratorUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/orquestrador/orquestrador.ps1',
-
-    [ValidateNotNullOrEmpty()]
-    [string]$TaskName = 'WinProvision_Orchestrator',
 
     [ValidateRange(1, 10)]
     [int]$MaxRetries = 3,
@@ -100,7 +85,6 @@ $tempRoot = $env:TEMP
 if (-not $tempRoot) { $tempRoot = 'C:\Windows\Temp' }
 $script:WorkDir   = Join-Path -Path $tempRoot -ChildPath 'WinProvision\Bootstrap'
 $script:MutexName = 'Global\WinProvision_Bootstrap'
-$script:TaskName  = $TaskName
 
 # --- Funções Auxiliares ---
 
@@ -140,51 +124,6 @@ function Test-IsElevated {
 
     $principal = New-Object -TypeName System.Security.Principal.WindowsPrincipal -ArgumentList $identity
     return $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-function Get-InteractiveUserName {
-    <#
-    .SYNOPSIS
-        Determina o usuário da sessão interativa de console, para agendar o Orquestrador
-        na sessão certa (permitindo UI visível) em vez de rodá-lo isolado em Sessão 0.
-    .DESCRIPTION
-        Se o Bootstrap já está rodando no contexto do próprio usuário (não SYSTEM), essa é
-        a resposta direta. Se está rodando como SYSTEM (caso comum via FirstLogonCommands),
-        consulta o Win32_ComputerSystem via CIM para descobrir quem é o usuário logado na
-        sessão de console; 'query user' é usado apenas como fallback, pois nem sempre está
-        disponível/confiável em builds mínimas.
-    .OUTPUTS
-        System.String. Nome do usuário no formato DOMÍNIO\Usuário, ou $null se não encontrado.
-    #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param()
-
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-
-    if ($identity.User.Value -ne 'S-1-5-18') {
-        return $identity.Name
-    }
-
-    try {
-        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
-        if ($cs.UserName) { return $cs.UserName }
-    }
-    catch { }
-
-    try {
-        $quserOutput = & query user 2>$null
-        if ($LASTEXITCODE -eq 0 -and $quserOutput) {
-            $activeLine = $quserOutput | Select-Object -Skip 1 | Where-Object { $_ -match '\sActive\s' } | Select-Object -First 1
-            if ($activeLine) {
-                $userName = ($activeLine.Trim() -split '\s+')[0].TrimStart('>')
-                if ($userName) { return "$env:COMPUTERNAME\$userName" }
-            }
-        }
-    }
-    catch { }
-
-    return $null
 }
 
 function Invoke-SelfElevate {
@@ -306,57 +245,6 @@ function Resolve-PwshPath {
     return $null
 }
 
-function Set-OrchestratorScheduledTask {
-    <#
-    .SYNOPSIS
-        Registra (ou atualiza) a Scheduled Task que roda o Orquestrador e a dispara
-        imediatamente para a sessão atual.
-    .DESCRIPTION
-        A task fica registrada permanentemente (não se auto-remove), disparando em cada
-        logon do usuário informado — útil para reexecução/depuração manual depois. Como o
-        evento de logon que ativaria a trigger 'AtLogOn' já aconteceu antes da task existir,
-        ela é iniciada manualmente aqui via Start-ScheduledTask para não perder a execução
-        desta sessão. LogonType Interactive + a sessão do usuário já estar ativa é o que
-        permite ao Task Scheduler lançar o processo nela (com UI visível), sem exigir senha
-        armazenada.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$PwshPath,
-        [Parameter(Mandatory)]
-        [string]$OrchestratorUrl,
-        [Parameter(Mandatory)]
-        [int]$TimeoutSec,
-        [Parameter(Mandatory)]
-        [int]$MaxRetries,
-        [Parameter(Mandatory)]
-        [string]$UserName
-    )
-
-    # Sintaxe do PS7+ (?? , -MaximumRetryCount) — executada dentro do pwsh, não desta sessão 5.1.
-    $taskCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$OrchestratorUrl' -TimeoutSec $TimeoutSec -MaximumRetryCount $MaxRetries -RetryIntervalSec 2)"
-    $argList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$taskCmd`""
-
-    $action    = New-ScheduledTaskAction -Execute $PwshPath -Argument $argList
-    $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $UserName
-    $principal = New-ScheduledTaskPrincipal -UserId $UserName -LogonType Interactive -RunLevel Highest
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-
-    $existing = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
-    if ($existing) {
-        Write-Step -Message "Task agendada '$script:TaskName' já existe — atualizando definição (fica registrada; útil para reexecução/depuração)." -Color Gray
-        $null = Set-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -ErrorAction Stop
-    }
-    else {
-        Write-Step -Message "Registrando task agendada '$script:TaskName' (fica registrada permanentemente; dispara em cada logon deste usuário)." -Color Gray
-        $null = Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force -ErrorAction Stop
-    }
-
-    Write-Step -Message "Disparando a task agendada agora, para esta sessão (usuário=$UserName)." -Color Cyan
-    Start-ScheduledTask -TaskName $script:TaskName -ErrorAction Stop
-}
-
 # --- Execução Principal ---
 
 function Start-Bootstrap {
@@ -453,24 +341,23 @@ function Start-Bootstrap {
 
         Write-Step -Message '[OK] PowerShell 7+ garantido nesta máquina.' -Color Green
 
-        # 4. Delega ao Orquestrador via Scheduled Task (nunca powershell.exe, nunca
-        #    bloqueando o logon) — roda na sessão interativa do usuário, permitindo
-        #    UI visível, e libera a área de trabalho imediatamente.
+        # 4. Delega ao Orquestrador via pwsh (nunca powershell.exe). Sem '-Wait': o
+        #    FirstLogonCommands/UserOnce roda na Sessão 1 (interativa) neste ambiente,
+        #    então não há isolamento de sessão a contornar — só o bloqueio síncrono,
+        #    que impediria a área de trabalho de aparecer até o Orquestrador terminar.
         $pwshExe = Resolve-PwshPath
         if (-not $pwshExe) {
             throw 'PowerShell 7+ foi instalado, mas o executável pwsh.exe não pôde ser localizado.'
         }
 
-        $interactiveUser = Get-InteractiveUserName
-        if (-not $interactiveUser) {
-            throw 'Não foi possível determinar o usuário da sessão interativa para agendar o Orquestrador.'
-        }
-
-        Write-Step -Message "Delegando execução para o Orquestrador via task agendada. pwsh=$pwshExe usuário=$interactiveUser" -Color Cyan
-        Set-OrchestratorScheduledTask -PwshPath $pwshExe -OrchestratorUrl $OrchestratorUrl -TimeoutSec $TimeoutSec -MaxRetries $MaxRetries -UserName $interactiveUser
-
-        Write-Step -Message '[OK] Orquestrador agendado e disparado. Bootstrap encerra sem bloquear o logon.' -Color Green
+        Write-Step -Message "Delegando execução para o Orquestrador via pwsh (sem aguardar): $pwshExe" -Color Cyan
         Write-Step -Message '============================================' -Color White
+
+        if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { }; $transcriptStarted = $false }
+
+        # A partir daqui, sintaxe é do PS7+ (executada dentro do pwsh, não desta sessão 5.1).
+        $orchestratorCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$OrchestratorUrl' -TimeoutSec $TimeoutSec -MaximumRetryCount $MaxRetries -RetryIntervalSec 2)"
+        $null = Start-Process -FilePath $pwshExe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $orchestratorCmd) -PassThru -ErrorAction Stop
 
         $exitCode = 0
     }
