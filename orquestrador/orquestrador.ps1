@@ -37,7 +37,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^https://')]
-    [string]$BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/m%C3%B3dulos/7%2B",
+    [string]$BaseUrl = "https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/modules/ps7",
 
     [ValidatePattern('^https://')]
     [string]$ManifestUrl = "$BaseUrl/manifest.json",
