@@ -84,6 +84,18 @@ $ConfirmPreference     = 'None'
 # Evita "mojibake" em mensagens acentuadas em sessões desatendidas
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
+# Força TLS 1.2 para chamadas .NET (Invoke-WebRequest/Invoke-RestMethod usam o
+# ServicePointManager por baixo). Necessário porque, numa máquina recém-sysprepada
+# (antes de qualquer Windows Update), o .NET Framework pode resolver
+# 'SystemDefault' para TLS 1.0 — que o raw.githubusercontent.com rejeita, causando
+# falha silenciosa de handshake em execuções não interativas (UserOnce/RunOnce).
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
+catch {
+    Write-Warning "Não foi possível forçar TLS 1.2 via ServicePointManager: $($_.Exception.Message)"
+}
+
 $tempRoot = $env:TEMP
 if (-not $tempRoot) { $tempRoot = 'C:\Windows\Temp' }
 $script:WorkDir   = Join-Path -Path $tempRoot -ChildPath 'WinProvision\Bootstrap'
