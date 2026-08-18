@@ -13,6 +13,11 @@ jobs:
       - name: Checkout do Repositório
         uses: actions/checkout@v4
 
+      # Corrige o encoding de arquivos .ps1 com UTF-8 BOM para evitar falhas no Git
+      - name: Corrigir Encoding dos Arquivos PowerShell
+        run: |
+          find . -type f -name "*.ps1" -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
+
       - name: Buscar Última Release do Office Tool Plus
         id: get_release
         env:
@@ -92,3 +97,4 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "auto(fallback): atualiza Office Tool Plus para a versão ${{ env.VERSION }}"
+          file_pattern: "config/manifest.json"
