@@ -5,6 +5,9 @@ on:
     - cron: '0 4 * * *' # Executa diariamente às 04:00 UTC
   workflow_dispatch: # Permite disparar manualmente pelo painel do GitHub
 
+permissions:
+  contents: write
+
 jobs:
   update-fallback:
     runs-on: ubuntu-latest
@@ -12,8 +15,11 @@ jobs:
     steps:
       - name: Checkout do Repositório
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
 
-      # Corrige o encoding de arquivos .ps1 com UTF-8 BOM para evitar falhas no Git
+      # Corrige o encoding de arquivos .ps1 com UTF-8 BOM para evitar avisos no Git
       - name: Corrigir Encoding dos Arquivos PowerShell
         run: |
           find . -type f -name "*.ps1" -exec sed -i '1s/^\xEF\xBB\xBF//' {} +
@@ -23,7 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Obtém a tag da última versão (ex: v11.6.6.0)
+          # Obtém a tag da última versão do projeto original (ex: v11.6.6.0)
           LATEST_TAG=$(gh release view --repo YerongAI/Office-Tool --json tagName -q .tagName)
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
           
@@ -56,35 +62,51 @@ jobs:
             echo "A versão no fallback já é a mais recente ($VERSION)."
           fi
 
-      - name: Baixar o Zip e Atualizar Fallback
+      - name: Baixar o Zip, Publicar na Sua Release e Atualizar Manifesto
         if: env.NEW_VERSION_NEEDED == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p ./downloads
           
-          # Baixa o arquivo exato da release no YerongAI/Office-Tool
+          # 1. Baixa o arquivo exato da release original
           gh release download ${{ env.LATEST_TAG }} \
             --repo YerongAI/Office-Tool \
             --pattern "${{ env.FILE_NAME }}" \
             --dir ./downloads
 
-          # Calcula o Hash SHA256 do arquivo baixado
+          # 2. Calcula o Hash SHA256 do arquivo baixado
           HASH=$(sha256sum ./downloads/${{ env.FILE_NAME }} | awk '{print $1}')
           
           echo "Arquivo baixado com sucesso."
           echo "SHA256: $HASH"
 
-          # Atualiza ou insere as informações do Office Tool Plus no manifesto
+          # 3. Cria uma Release no SEU próprio repositório com o arquivo de fallback
+          MY_TAG="office-tool-${{ env.LATEST_TAG }}"
+          
+          # Deleta a tag local/remota da release anterior se por acaso já existir
+          gh release delete "$MY_TAG" -y --cleanup-tag || true
+
+          # Cria a Release no seu repositório com o asset do .zip
+          gh release create "$MY_TAG" "./downloads/${{ env.FILE_NAME }}" \
+            --title "Fallback Office Tool Plus ${{ env.LATEST_TAG }}" \
+            --notes "Espelho de Fallback automatizado do Office Tool Plus versão ${{ env.VERSION }} para o WinProvision. SHA256: $HASH"
+
+          # 4. Monta a URL direta de download do SEU repositório
+          MY_REPO="${{ github.repository }}"
+          MY_DOWNLOAD_URL="https://github.com/${MY_REPO}/releases/download/${MY_TAG}/${{ env.FILE_NAME }}"
+
+          # 5. Atualiza o manifesto apontando para o SEU fallback
           jq --arg ver "$VERSION" \
-             --arg tag "$LATEST_TAG" \
+             --arg tag "$MY_TAG" \
              --arg file "$FILE_NAME" \
+             --arg url "$MY_DOWNLOAD_URL" \
              --arg sha "$HASH" \
              '.office_tool = {
                 version: $ver,
                 tag: $tag,
                 filename: $file,
-                download_url: ("https://github.com/YerongAI/Office-Tool/releases/download/" + $tag + "/" + $file),
+                download_url: $url,
                 sha256: $sha,
                 updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))
               }' \
