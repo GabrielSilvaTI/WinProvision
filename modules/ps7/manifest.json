@@ -2,5 +2,6 @@
   { "Name": "Wallpaper",    "Function": "Set-Wallpaper" },
   { "Name": "Install-Winget",    "Function": "Install-Winget" },
   { "Name": "Install-Programas", "Function": "Install-Programas" },
-  { "Name": "Install-Office",    "Function": "Install-Office" }
+  { "Name": "Install-Office",    "Function": "Install-Office" },
+  { "Name": "OfficeFinale",    "Function": "Invoke-OfficeFinale" }
 ]
