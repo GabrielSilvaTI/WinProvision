@@ -77,8 +77,11 @@ function Test-OfficeInstalled {
 
     foreach ($regPath in $officeRegPaths) {
         if (Test-Path -Path $regPath) {
-            $productIds = (Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue).ProductReleaseIds
-            if ($productIds) { return $productIds }
+            $regProps = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+            if ($regProps -and $regProps.PSObject.Properties['ProductReleaseIds']) {
+                $productIds = $regProps.ProductReleaseIds
+                if ($productIds) { return $productIds }
+            }
         }
     }
 
