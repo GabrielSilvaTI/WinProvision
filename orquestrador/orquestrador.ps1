@@ -35,7 +35,9 @@
 .PARAMETER TimeoutSec
     Timeout, em segundos, para cada requisição HTTP.
 .PARAMETER LogPath
-    Caminho do arquivo de log (transcript) da execução.
+    Caminho do arquivo de log (transcript) da execução. Se omitido, é
+    gerado um nome único por execução com timestamp, evitando mistura
+    de execuções anteriores no mesmo arquivo.
 .NOTES
     Versão: 3.2 (Fully Automated / PowerShell 7+ / Manifesto Obrigatório / Log Final)
 #>
@@ -56,7 +58,7 @@ param(
     [ValidateRange(5, 300)]
     [int]$TimeoutSec = 30,
 
-    [string]$LogPath = (Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\provision.log")
+    [string]$LogPath
 )
 
 # --- Configurações de Automação Total (Zero Interatividade) ---
@@ -322,12 +324,17 @@ function Start-Provision {
 
     $startTime         = Get-Date
     $transcriptStarted = $false
+
+    if (-not $LogPath) {
+        $LogPath = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\provision_$($startTime.ToString('yyyyMMdd-HHmmss')).log"
+    }
+
     try {
         $logDir = Split-Path -Path $LogPath -Parent
         if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
             $null = New-Item -Path $logDir -ItemType Directory -Force
         }
-        Start-Transcript -Path $LogPath -Append -ErrorAction Stop | Out-Null
+        Start-Transcript -Path $LogPath -ErrorAction Stop | Out-Null
         $transcriptStarted = $true
     }
     catch {
