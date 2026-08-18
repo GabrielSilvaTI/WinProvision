@@ -15,6 +15,12 @@
 
     Para uso manual/teste, é possível ignorar o manifesto remoto passando
     -Modules explicitamente.
+
+    Independente do manifesto, o orquestrador publica um log final ao
+    término da execução — sucesso ou falha — via o módulo WinProvisionLog.
+    Esse módulo não faz parte da lista de provisionamento: é baixado e
+    invocado diretamente, fora do loop de módulos, para garantir que rode
+    mesmo quando um módulo anterior falha e interrompe o pipeline.
 .PARAMETER BaseUrl
     URL base (raw.githubusercontent.com) onde os módulos (.psd1/.psm1) estão hospedados.
 .PARAMETER ManifestUrl
@@ -31,7 +37,7 @@
 .PARAMETER LogPath
     Caminho do arquivo de log (transcript) da execução.
 .NOTES
-    Versão: 3.1 (Fully Automated / PowerShell 7+ / Manifesto Obrigatório)
+    Versão: 3.2 (Fully Automated / PowerShell 7+ / Manifesto Obrigatório / Log Final)
 #>
 
 [CmdletBinding()]
@@ -63,11 +69,15 @@ $InformationPreference = 'Continue'
 # Evita "mojibake" em mensagens acentuadas em sessões desatendidas
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 
-$script:BaseUrl     = $BaseUrl
-$script:ManifestUrl = $ManifestUrl
-$script:MaxRetries  = $MaxRetries
-$script:TimeoutSec  = $TimeoutSec
-$script:WorkDir     = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\Modules"
+$script:BaseUrl          = $BaseUrl
+$script:ManifestUrl      = $ManifestUrl
+$script:MaxRetries       = $MaxRetries
+$script:TimeoutSec       = $TimeoutSec
+$script:WorkDir          = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\Modules"
+
+# Nome fixo do módulo de log final. Não vem do manifesto: é infraestrutura
+# do orquestrador, chamada diretamente, não um passo de provisionamento.
+$script:LoggerModuleName = "WinProvisionLog"
 
 # Nome de módulo só pode conter caracteres seguros para nome de arquivo/URL,
 # já que é usado para montar caminhos em disco e endpoints HTTP.
@@ -275,12 +285,42 @@ function Remove-WorkDirectory {
     }
 }
 
+function Publish-FinalLog {
+    <#
+        Baixa e invoca o módulo WinProvisionLog diretamente, fora do loop
+        de provisionamento e do manifest.json. Roda sempre — sucesso ou
+        falha — porque é chamado incondicionalmente pelo bloco final de
+        Start-Provision, não pela lista sequencial que interrompe no
+        primeiro módulo com falha.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [bool]$Success,
+        [string]$FailedModule,
+        [datetime]$StartTime
+    )
+    try {
+        Save-ModuleFiles -ModuleName $script:LoggerModuleName | Out-Null
+        Import-ModuleFromTemp -ModuleName $script:LoggerModuleName
+        Complete-ProvisionLog -TranscriptPath $LogPath -Success $Success `
+            -FailedModule $FailedModule -StartTime $StartTime | Out-Null
+    }
+    catch {
+        Write-Host "Aviso: não foi possível publicar o log final: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    finally {
+        Remove-WorkDirectory
+    }
+}
+
 # --- Execução Principal ---
 
 function Start-Provision {
     [CmdletBinding()]
     param()
 
+    $startTime         = Get-Date
     $transcriptStarted = $false
     try {
         $logDir = Split-Path -Path $LogPath -Parent
@@ -360,6 +400,10 @@ function Start-Provision {
     if ($transcriptStarted) {
         try { Stop-Transcript | Out-Null } catch { }
     }
+
+    # Publicação final do log: incondicional, roda mesmo se um módulo
+    # anterior falhou e interrompeu o loop acima.
+    Publish-FinalLog -Success $overallSuccess -FailedModule $failedModule -StartTime $startTime
 
     exit $exitCode
 }
