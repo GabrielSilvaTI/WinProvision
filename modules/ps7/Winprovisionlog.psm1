@@ -8,9 +8,9 @@
     única função, chamada pelo orquestrador ao final da execução — sucesso
     ou falha — para arquivar o transcript localmente e notificar via Discord.
 
-    O webhook nunca deve ser um literal em código versionado. Use a
-    variável de ambiente WINPROVISION_DISCORD_WEBHOOK, definida na máquina
-    durante o provisionamento, fora do repositório.
+    O webhook está definido como padrão do parâmetro DiscordWebhook. Pode
+    ser sobrescrito passando -DiscordWebhook explicitamente, ou trocado
+    por uma variável de ambiente / arquivo externo no futuro.
 #>
 
 <#
@@ -25,8 +25,7 @@
 .PARAMETER StartTime
     Horário de início da execução, para cálculo de duração no resumo.
 .PARAMETER DiscordWebhook
-    URL do webhook. Padrão: variável de ambiente WINPROVISION_DISCORD_WEBHOOK.
-    Se ausente, o log é apenas arquivado localmente.
+    URL do webhook do Discord. Se vazia, o log é apenas arquivado localmente.
 .PARAMETER ArchivePath
     Pasta local onde o log arquivado é salvo.
 #>
@@ -44,7 +43,7 @@ function Complete-ProvisionLog {
 
         [datetime]$StartTime,
 
-        [string]$DiscordWebhook = $env:WINPROVISION_DISCORD_WEBHOOK,
+        [string]$DiscordWebhook = 'https://discord.com/api/webhooks/1539058959900610560/6072l5AgVdCx_XqiGsDAaNUpLdFqrkhT7Q4HkoD5973N8JS86D-QDHBNlVwJRYWeFqJq',
 
         [string]$ArchivePath = 'C:\ProgramData\WinProvision\Logs'
     )
@@ -78,7 +77,7 @@ function Complete-ProvisionLog {
     }
 
     if (-not $DiscordWebhook) {
-        Write-Warning "Nenhum webhook configurado (WINPROVISION_DISCORD_WEBHOOK). Log arquivado apenas localmente."
+        Write-Warning "Nenhum webhook configurado. Log arquivado apenas localmente."
         return $true
     }
 
