@@ -22,22 +22,30 @@ jobs:
           LATEST_TAG=$(gh release view --repo YerongAI/Office-Tool --json tagName -q .tagName)
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
           
-          # Remove o 'v' inicial se necessário para bater com o nome do arquivo
+          # Remove o 'v' inicial para extrair apenas a numeração da versão
           VERSION=${LATEST_TAG#v}
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           
-          # Monta o nome exato do arquivo desejado
+          # Monta o nome exato do arquivo zip com runtime x64
           FILE_NAME="Office_Tool_with_runtime_v${VERSION}_x64.zip"
           echo "FILE_NAME=$FILE_NAME" >> $GITHUB_ENV
 
-      - name: Verificar se há atualização pendente
+      - name: Garantir existência do arquivo de manifesto e verificar versão
         run: |
-          # Lê a versão atualmente registrada no seu manifesto local
-          CURRENT_VERSION=$(jq -r '.office_tool.version // ""' config/manifest.json 2>/dev/null || echo "")
+          # Cria o diretório 'config' caso não exista
+          mkdir -p config
+
+          # Se o manifesto não existir, cria com estrutura JSON inicial válida
+          if [ ! -f config/manifest.json ]; then
+            echo "{}" > config/manifest.json
+          fi
+
+          # Lê a versão atual registrada no manifesto
+          CURRENT_VERSION=$(jq -r '.office_tool.version // ""' config/manifest.json)
 
           if [ "$VERSION" != "$CURRENT_VERSION" ]; then
             echo "NEW_VERSION_NEEDED=true" >> $GITHUB_ENV
-            echo "Nova versão detectada: $VERSION (Versão atual: $CURRENT_VERSION)"
+            echo "Nova versão detectada: $VERSION (Versão atual no manifesto: '$CURRENT_VERSION')"
           else
             echo "NEW_VERSION_NEEDED=false" >> $GITHUB_ENV
             echo "A versão no fallback já é a mais recente ($VERSION)."
@@ -50,7 +58,7 @@ jobs:
         run: |
           mkdir -p ./downloads
           
-          # Baixa o asset exato da release no YerongAI/Office-Tool
+          # Baixa o arquivo exato da release no YerongAI/Office-Tool
           gh release download ${{ env.LATEST_TAG }} \
             --repo YerongAI/Office-Tool \
             --pattern "${{ env.FILE_NAME }}" \
@@ -62,23 +70,24 @@ jobs:
           echo "Arquivo baixado com sucesso."
           echo "SHA256: $HASH"
 
-          # -------------------------------------------------------------
-          # AQUI VOCÊ PODE ENVIAR O .ZIP PARA O SEU STORAGE DE FALLBACK
-          # Exemplo para AWS S3:
-          # aws s3 cp ./downloads/${{ env.FILE_NAME }} s3://meu-bucket-winprovision/office-tool/Office_Tool_x64_latest.zip
-          # -------------------------------------------------------------
-
-          # Atualiza o manifesto do WinProvision com a versão, nome do arquivo e hash
-          mkdir -p config
+          # Atualiza ou insere as informações do Office Tool Plus no manifesto
           jq --arg ver "$VERSION" \
              --arg tag "$LATEST_TAG" \
              --arg file "$FILE_NAME" \
              --arg sha "$HASH" \
-             '.office_tool = {version: $ver, tag: $tag, filename: $file, sha256: $sha, updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))}' \
+             '.office_tool = {
+                version: $ver,
+                tag: $tag,
+                filename: $file,
+                download_url: ("https://github.com/YerongAI/Office-Tool/releases/download/" + $tag + "/" + $file),
+                sha256: $sha,
+                updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))
+              }' \
              config/manifest.json > config/manifest.tmp.json
+
           mv config/manifest.tmp.json config/manifest.json
 
-      - name: Commit do Manifesto Atualizado
+      - name: Commit e Push do Manifesto
         if: env.NEW_VERSION_NEEDED == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
