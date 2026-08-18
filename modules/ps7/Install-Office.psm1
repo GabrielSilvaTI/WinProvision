@@ -77,10 +77,12 @@ function Test-OfficeInstalled {
 
     foreach ($regPath in $officeRegPaths) {
         if (Test-Path -Path $regPath) {
-            $regProps = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
-            if ($regProps -and $regProps.PSObject.Properties['ProductReleaseIds']) {
-                $productIds = $regProps.ProductReleaseIds
+            try {
+                $productIds = Get-ItemPropertyValue -Path $regPath -Name 'ProductReleaseIds' -ErrorAction Stop
                 if ($productIds) { return $productIds }
+            }
+            catch {
+                # Ignora a ausência da propriedade/valor e prossegue com o fluxo
             }
         }
     }
