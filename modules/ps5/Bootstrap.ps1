@@ -69,7 +69,12 @@ $ProgressPreference    = 'SilentlyContinue'
 $ConfirmPreference     = 'None'
 
 # Evita "mojibake" em mensagens acentuadas em sessões desatendidas
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+}
+catch {
+    Write-Verbose "Não foi possível definir OutputEncoding para UTF-8: $($_.Exception.Message)"
+}
 
 # Força TLS 1.2 para chamadas .NET (Invoke-WebRequest/Invoke-RestMethod usam o
 # ServicePointManager por baixo). Necessário porque, numa máquina recém-sysprepada
@@ -82,6 +87,18 @@ try {
 catch {
     Write-Warning "Não foi possível forçar TLS 1.2 via ServicePointManager: $($_.Exception.Message)"
 }
+
+# Variáveis de script explícitas para os parâmetros: funções abaixo referenciam
+# $script:<Nome> em vez de depender do encadeamento de escopo do PowerShell.
+# Além de deixar a leitura clara, evita falsos positivos de "parâmetro não
+# utilizado" em análise estática, já que o uso dentro de funções aninhadas
+# nem sempre é reconhecido como uso do parâmetro do script.
+$script:ModuleBaseUrl    = $ModuleBaseUrl
+$script:BootstrapUrl     = $BootstrapUrl
+$script:OrchestratorUrl  = $OrchestratorUrl
+$script:MaxRetries       = $MaxRetries
+$script:TimeoutSec       = $TimeoutSec
+$script:LogPath          = $LogPath
 
 $tempRoot = $env:TEMP
 if (-not $tempRoot) { $tempRoot = 'C:\Windows\Temp' }
@@ -153,8 +170,8 @@ function Invoke-SelfElevate {
         $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     }
     else {
-        Write-Step -Message "Executando via pipe (sem arquivo local). Relançando via download remoto ($BootstrapUrl) com elevação (UAC)..." -Color Yellow
-        $remoteCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-WebRequest -Uri '$BootstrapUrl' -UseBasicParsing -TimeoutSec $TimeoutSec).Content"
+        Write-Step -Message "Executando via pipe (sem arquivo local). Relançando via download remoto ($script:BootstrapUrl) com elevação (UAC)..." -Color Yellow
+        $remoteCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-WebRequest -Uri '$script:BootstrapUrl' -UseBasicParsing -TimeoutSec $script:TimeoutSec).Content"
         $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $remoteCmd)
     }
 
@@ -208,7 +225,7 @@ function Save-BootstrapModuleFiles {
     $null = New-Item -Path $moduleDir -ItemType Directory -Force
 
     foreach ($ext in @('psd1', 'psm1')) {
-        $url  = "$ModuleBaseUrl/Install-PowerShell7.$ext"
+        $url  = "$script:ModuleBaseUrl/Install-PowerShell7.$ext"
         $dest = Join-Path -Path $moduleDir -ChildPath "Install-PowerShell7.$ext"
 
         Write-Step -Message "Baixando: Install-PowerShell7.$ext ..." -Color Gray
@@ -217,14 +234,14 @@ function Save-BootstrapModuleFiles {
         while ($true) {
             $attempt++
             try {
-                Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
+                Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -TimeoutSec $script:TimeoutSec -ErrorAction Stop
                 break
             }
             catch {
-                if ($attempt -ge $MaxRetries) {
-                    throw "Falha ao baixar Install-PowerShell7.$ext após $MaxRetries tentativa(s): $($_.Exception.Message)"
+                if ($attempt -ge $script:MaxRetries) {
+                    throw "Falha ao baixar Install-PowerShell7.$ext após $script:MaxRetries tentativa(s): $($_.Exception.Message)"
                 }
-                Write-Step -Message "Tentativa $attempt/$MaxRetries falhou ao baixar '$ext': $($_.Exception.Message). Nova tentativa em 2s..." -Color Yellow
+                Write-Step -Message "Tentativa $attempt/$script:MaxRetries falhou ao baixar '$ext': $($_.Exception.Message). Nova tentativa em 2s..." -Color Yellow
                 Start-Sleep -Seconds 2
             }
         }
@@ -261,15 +278,15 @@ function Start-Bootstrap {
 
     $transcriptStarted = $false
     try {
-        $logDir = Split-Path -Path $LogPath -Parent
+        $logDir = Split-Path -Path $script:LogPath -Parent
         if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
             $null = New-Item -Path $logDir -ItemType Directory -Force
         }
-        Start-Transcript -Path $LogPath -Append -ErrorAction Stop | Out-Null
+        Start-Transcript -Path $script:LogPath -Append -ErrorAction Stop | Out-Null
         $transcriptStarted = $true
     }
     catch {
-        Write-Step -Message "Aviso: não foi possível iniciar o log em '$LogPath': $($_.Exception.Message)" -Color Yellow
+        Write-Step -Message "Aviso: não foi possível iniciar o log em '$script:LogPath': $($_.Exception.Message)" -Color Yellow
     }
 
     Write-Step -Message '============================================' -Color White
@@ -285,7 +302,15 @@ function Start-Bootstrap {
         #    apenas relança e aguarda o filho elevado — evita deadlock no mutex.
         if (-not (Test-IsElevated)) {
             Write-Step -Message 'Privilégios administrativos ausentes.' -Color Yellow
-            if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { }; $transcriptStarted = $false }
+            if ($transcriptStarted) {
+                try {
+                    Stop-Transcript | Out-Null
+                }
+                catch {
+                    Write-Verbose "Não foi possível finalizar o transcript antes da elevação: $($_.Exception.Message)"
+                }
+                $transcriptStarted = $false
+            }
 
             $childExitCode = Invoke-SelfElevate
             exit $childExitCode
@@ -331,7 +356,7 @@ function Start-Bootstrap {
         Import-Module -Name $psd1 -Force -DisableNameChecking -ErrorAction Stop
 
         Write-Step -Message 'Garantindo PowerShell 7+ instalado...' -Color Cyan
-        $result = Install-PowerShell7 -MaxRetries $MaxRetries -TimeoutSec $TimeoutSec
+        $result = Install-PowerShell7 -MaxRetries $script:MaxRetries -TimeoutSec $script:TimeoutSec
 
         # Mesmo contrato de retorno usado pelo Orquestrador ao avaliar módulos:
         # $null (sucesso implícito), [bool], ou objeto/hashtable com propriedade 'Success'.
@@ -358,13 +383,21 @@ function Start-Bootstrap {
             throw 'PowerShell 7+ foi instalado, mas o executável pwsh.exe não pôde ser localizado.'
         }
 
-        $orchestratorCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$OrchestratorUrl' -TimeoutSec $TimeoutSec -MaximumRetryCount $MaxRetries -RetryIntervalSec 2)"
+        $orchestratorCmd = "`$ProgressPreference='SilentlyContinue'; Invoke-Expression (Invoke-RestMethod -Uri '$script:OrchestratorUrl' -TimeoutSec $script:TimeoutSec -MaximumRetryCount $script:MaxRetries -RetryIntervalSec 2)"
         $pwshArgs = "-NoProfile -ExecutionPolicy Bypass -Command `"$orchestratorCmd`""
 
         Write-Step -Message "Delegando execução para o Orquestrador via pwsh (sem aguardar): $pwshExe" -Color Cyan
         Write-Step -Message '============================================' -Color White
 
-        if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { }; $transcriptStarted = $false }
+        if ($transcriptStarted) {
+            try {
+                Stop-Transcript | Out-Null
+            }
+            catch {
+                Write-Verbose "Não foi possível finalizar o transcript antes da delegação: $($_.Exception.Message)"
+            }
+            $transcriptStarted = $false
+        }
 
         $null = Start-Process -FilePath $pwshExe -ArgumentList $pwshArgs -PassThru -ErrorAction Stop
 
@@ -377,11 +410,21 @@ function Start-Bootstrap {
     finally {
         Remove-WorkDirectory
         if ($mutexOwned -and $mutex) {
-            try { $mutex.ReleaseMutex() } catch { }
+            try {
+                $mutex.ReleaseMutex()
+            }
+            catch {
+                Write-Verbose "Não foi possível liberar o mutex: $($_.Exception.Message)"
+            }
         }
         if ($mutex) { $mutex.Dispose() }
         if ($transcriptStarted) {
-            try { Stop-Transcript | Out-Null } catch { }
+            try {
+                Stop-Transcript | Out-Null
+            }
+            catch {
+                Write-Verbose "Não foi possível finalizar o transcript no encerramento: $($_.Exception.Message)"
+            }
         }
     }
 
