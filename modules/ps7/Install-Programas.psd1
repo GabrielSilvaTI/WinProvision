@@ -3,7 +3,7 @@
     RootModule           = 'Install-Programas.psm1'
 
     # Versão do Módulo
-    ModuleVersion        = '1.4.0'
+    ModuleVersion        = '1.5.0'
 
     # Identificador único (GUID)
     GUID                 = 'b2a1a8c4-543e-4b47-920f-02d1a3c71289'
