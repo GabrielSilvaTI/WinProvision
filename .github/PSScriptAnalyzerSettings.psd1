@@ -1,80 +1,34 @@
-#
-# PSScriptAnalyzerSettings.psd1
-# Coloque este arquivo em: .github/PSScriptAnalyzerSettings.psd1
-#
-# Documentação completa das regras:
-#   https://github.com/PowerShell/PSScriptAnalyzer/tree/master/docs/Rules
-#
-# Uso via workflow:
-#   Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\.github\PSScriptAnalyzerSettings.psd1
-#
 @{
-    # ── Severidades avaliadas ────────────────────────────────────────────────
-    # Error   → bloqueia merge (bug real ou risco de segurança)
-    # Warning → bloqueia merge (má prática detectável)
-    # Information → apenas informativo, não bloqueia
-    Severity = @('Error', 'Warning', 'Information')
-
-    # ── Regras EXCLUÍDAS ─────────────────────────────────────────────────────
-    # Justificativas documentadas por regra para facilitar revisão futura.
-    ExcludeRules = @(
-
-        # Scripts de provisionamento usam Write-Host intencionalmente para
-        # exibir progresso colorido em contextos headless/UserOnce onde
-        # apenas o console importa (sem pipeline de objetos).
-        'PSAvoidUsingWriteHost',
-
-        # Múltiplas funções por arquivo é o padrão adotado nos módulos
-        # de provisionamento (um arquivo = um módulo coeso).
-        'PSReviewUnusedParameter',
-
-        # Linhas longas são inevitáveis em ArgumentLists de winget/choco
-        # e em blocos de configuração ($CFG). Limite de 120 chars no editor.
-        'PSAvoidLongLines',
-
-        # Alinhamento de atribuições (@{} com padding) é deliberado
-        # para legibilidade no $CFG e tabelas de configuração.
-        'PSAlignAssignmentStatement'
+    # Analisa apenas avisos graves e erros de código
+    Severity = @(
+        'Error',
+        'Warning'
     )
 
-    # ── Regras INCLUÍDAS explicitamente (além das built-in) ──────────────────
-    # Todas as built-in já são ativas por padrão; esta seção adiciona
-    # regras de segurança que queremos garantir mesmo se o default mudar.
+    # Executa todas as regras nativas de segurança e corretude...
     IncludeDefaultRules = $true
 
-    # ── Configurações por regra ───────────────────────────────────────────────
+    # ...EXCETO as regras estéticas e ruidosas abaixo:
+    ExcludeRules = @(
+        # Encoding e Formatação
+        'PSUseBOM',                          # Já tratado automaticamente no workflow
+        'PSAvoidUsingCmdletAliases',         # Permite aliases comuns como % para ForEach-Object ou dir
+        'PSUseCorrectCasing',                # Ignora maiúsculas/minúsculas em comandos (ex: write-host vs Write-Host)
+        
+        # Estilo e Organização Interna
+        'PSAvoidLongLines',                  # Não reclama do tamanho das linhas do código
+        'PSUseShouldProcessForStateChangingFunctions', # Evita exigir -WhatIf/-Confirm em funções internas
+        'PSAvoidUsingWriteHost',             # Permite mensagens coloridas de log no console via Write-Host
+        'PSProvideCommentBasedHelp'          # Não exige blocos de documentação <# ... #> em todas as funções
+    )
+
+    # Regras customizadas para modularidade
     Rules = @{
-
-        # Detecta credenciais em texto plano (ex: -Password "abc")
-        PSAvoidUsingConvertToSecureStringWithPlainText = @{
-            Enable = $true
+        PSAvoidGlobalVars = @{
+            Enable = $true                   # Evita poluição de variáveis no escopo global
         }
-
-        # Proíbe uso de Invoke-Expression (vetor de injeção)
-        PSAvoidUsingInvokeExpression = @{
-            Enable = $true
-        }
-
-        # Garante uso de verbos aprovados em funções exportadas
-        PSUseApprovedVerbs = @{
-            Enable = $true
-        }
-
-        # Exige que cmdlets que alteram estado suportem -WhatIf/-Confirm
-        # Desabilitado: scripts de provisionamento não são cmdlets interativos
-        PSUseShouldProcessForStateChangingFunctions = @{
-            Enable = $false
-        }
-
-        # Consistência de aspas: prefere aspas simples quando não há expansão
-        PSAvoidUsingDoubleQuotesForConstantString = @{
-            Enable = $false   # scripts têm muitas strings com $vars; desabilitado p/ ruído
-        }
-
-        # Comprimento máximo de linha (em chars) — aplicado apenas como info
-        PSAvoidLongLines = @{
-            Enable            = $false   # excluído acima; config aqui para documentação
-            MaximumLineLength = 160
+        PSAvoidUsingPlainTextForPassword = @{
+            Enable = $true                   # Evita senhas hardcoded em texto puro
         }
     }
 }
