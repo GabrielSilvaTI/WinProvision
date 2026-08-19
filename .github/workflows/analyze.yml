@@ -93,7 +93,8 @@ jobs:
                   continue
               }
 
-              $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules |
+              $results = $targetFiles |
+                  ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -ExcludeRule $excludedRules } |
                   Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
               if (-not $results) {
