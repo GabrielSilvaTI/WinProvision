@@ -1,0 +1,112 @@
+name: Sync PowerShell 7 Fallback
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # Executa diariamente às 03:00 UTC
+  workflow_dispatch: # Permite disparar manualmente pelo painel do GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  update-powershell-fallback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Buscar Última Release do PowerShell 7
+        id: get_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Obtém a tag da última versão estável do PowerShell (ex: v7.6.5)
+          LATEST_TAG=$(gh release view --repo PowerShell/PowerShell --json tagName -q .tagName)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          
+          # Remove o 'v' inicial para extrair a versão limpa (ex: 7.6.5)
+          VERSION=${LATEST_TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          
+          # Monta o nome exato do arquivo MSI x64
+          FILE_NAME="PowerShell-${VERSION}-win-x64.msi"
+          echo "FILE_NAME=$FILE_NAME" >> $GITHUB_ENV
+
+      - name: Garantir existência do manifesto e verificar versão
+        run: |
+          # Cria o diretório config/fallback caso não exista
+          mkdir -p config/fallback
+
+          # Se o Powershell7.json não existir, cria com estrutura inicial
+          if [ ! -f config/fallback/Powershell7.json ]; then
+            echo "{}" > config/fallback/Powershell7.json
+          fi
+
+          # Lê a versão atual salva no Powershell7.json
+          CURRENT_VERSION=$(jq -r '.powershell.version // ""' config/fallback/Powershell7.json)
+
+          if [ "$VERSION" != "$CURRENT_VERSION" ]; then
+            echo "NEW_VERSION_NEEDED=true" >> $GITHUB_ENV
+            echo "Nova versão do PowerShell 7 detectada: $VERSION (Versão atual no manifesto: '$CURRENT_VERSION')"
+          else
+            echo "NEW_VERSION_NEEDED=false" >> $GITHUB_ENV
+            echo "A versão do PowerShell 7 no fallback já é a mais recente ($VERSION)."
+          fi
+
+      - name: Baixar o MSI, Publicar na Release Fixa e Atualizar Manifesto
+        if: env.NEW_VERSION_NEEDED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./downloads
+
+          # 1. Baixa o instalador MSI x64 da versão mais recente
+          gh release download ${{ env.LATEST_TAG }} \
+            --repo PowerShell/PowerShell \
+            --pattern "${{ env.FILE_NAME }}" \
+            --dir ./downloads
+
+          # 2. Calcula o Hash SHA256 do arquivo baixado
+          HASH=$(sha256sum "./downloads/${{ env.FILE_NAME }}" | awk '{print $1}')
+          
+          echo "Arquivo baixado com sucesso: ${{ env.FILE_NAME }}"
+          echo "SHA256: $HASH"
+
+          # 3. Envia para a Release Fixa 'fallbacks' compartilhada (--clobber substitui se já existir)
+          TAG_FIXA="fallbacks"
+
+          gh release upload $TAG_FIXA "./downloads/${{ env.FILE_NAME }}" --clobber || \
+          gh release create $TAG_FIXA "./downloads/${{ env.FILE_NAME }}" \
+            --title "WinProvision - Pacotes de Fallback" \
+            --notes "Repositório central de artefatos e instaladores de fallback do WinProvision."
+
+          # 4. Monta a URL direta de download do repositório
+          MY_REPO="${{ github.repository }}"
+          MY_DOWNLOAD_URL="https://github.com/${MY_REPO}/releases/download/${TAG_FIXA}/${{ env.FILE_NAME }}"
+
+          # 5. Atualiza o manifesto config/fallback/Powershell7.json
+          jq --arg ver "$VERSION" \
+             --arg file "$FILE_NAME" \
+             --arg url "$MY_DOWNLOAD_URL" \
+             --arg sha "$HASH" \
+             '.powershell = {
+                version: $ver,
+                filename: $file,
+                download_url: $url,
+                sha256: $sha,
+                updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))
+              }' \
+             config/fallback/Powershell7.json > config/fallback/Powershell7.tmp.json
+
+          mv config/fallback/Powershell7.tmp.json config/fallback/Powershell7.json
+
+      - name: Commit e Push do Manifesto
+        if: env.NEW_VERSION_NEEDED == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "auto(fallback): atualiza PowerShell 7 para a versão ${{ env.VERSION }}"
+          file_pattern: "config/fallback/Powershell7.json"
