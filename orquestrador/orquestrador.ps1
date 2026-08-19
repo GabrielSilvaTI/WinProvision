@@ -69,12 +69,18 @@ $ConfirmPreference     = 'None'             # Suprime confirmações do PowerShe
 $InformationPreference = 'Continue'
 
 # Evita "mojibake" em mensagens acentuadas em sessões desatendidas
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+}
+catch {
+    Write-Verbose "Não foi possível definir OutputEncoding para UTF-8: $($_.Exception.Message)"
+}
 
 $script:BaseUrl          = $BaseUrl
 $script:ManifestUrl      = $ManifestUrl
 $script:MaxRetries       = $MaxRetries
 $script:TimeoutSec       = $TimeoutSec
+$script:LogPath          = $LogPath
 $script:WorkDir          = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\Modules"
 
 # Nome fixo do módulo de log final. Não vem do manifesto: é infraestrutura
@@ -305,7 +311,7 @@ function Publish-FinalLog {
     try {
         Save-ModuleFiles -ModuleName $script:LoggerModuleName | Out-Null
         Import-ModuleFromTemp -ModuleName $script:LoggerModuleName
-        Complete-ProvisionLog -TranscriptPath $LogPath -Success $Success `
+        Complete-ProvisionLog -TranscriptPath $script:LogPath -Success $Success `
             -FailedModule $FailedModule -StartTime $StartTime | Out-Null
     }
     catch {
@@ -325,20 +331,20 @@ function Start-Provision {
     $startTime         = Get-Date
     $transcriptStarted = $false
 
-    if (-not $LogPath) {
-        $LogPath = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\provision_$($startTime.ToString('yyyyMMdd-HHmmss')).log"
+    if (-not $script:LogPath) {
+        $script:LogPath = Join-Path ($env:TEMP ?? "C:\Windows\Temp") "WinProvision\provision_$($startTime.ToString('yyyyMMdd-HHmmss')).log"
     }
 
     try {
-        $logDir = Split-Path -Path $LogPath -Parent
+        $logDir = Split-Path -Path $script:LogPath -Parent
         if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
             $null = New-Item -Path $logDir -ItemType Directory -Force
         }
-        Start-Transcript -Path $LogPath -ErrorAction Stop | Out-Null
+        Start-Transcript -Path $script:LogPath -ErrorAction Stop | Out-Null
         $transcriptStarted = $true
     }
     catch {
-        Write-Step -Message "Aviso: não foi possível iniciar o log em '$LogPath': $($_.Exception.Message)" -Color Yellow
+        Write-Step -Message "Aviso: não foi possível iniciar o log em '$script:LogPath': $($_.Exception.Message)" -Color Yellow
     }
 
     Write-Step -Message "============================================" -Color White
@@ -405,7 +411,12 @@ function Start-Provision {
     }
 
     if ($transcriptStarted) {
-        try { Stop-Transcript | Out-Null } catch { }
+        try {
+            Stop-Transcript | Out-Null
+        }
+        catch {
+            Write-Verbose "Não foi possível finalizar o transcript: $($_.Exception.Message)"
+        }
     }
 
     # Publicação final do log: incondicional, roda mesmo se um módulo
