@@ -1,0 +1,9 @@
+{
+  "powershell": {
+    "version": "7.6.5",
+    "filename": "PowerShell-7.6.5-win-x64.msi",
+    "download_url": "https://github.com/GabrielSilvaTI/WinProvision/releases/download/fallbacks/PowerShell-7.6.5-win-x64.msi",
+    "sha256": "3a87c24e044ec792047d734c841917ee4323a535e25f645ae6c33141a35fca8d",
+    "updated_at": "2026-08-19 02:00:15Z"
+  }
+}
