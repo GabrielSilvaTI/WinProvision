@@ -1,0 +1,101 @@
+name: Generate UI Manifest from Engine
+
+on:
+  push:
+    paths:
+      - 'modules/ps7/manifest.json' # Dispara quando o manifesto for alterado
+  workflow_dispatch: # Permite rodar manualmente pela aba Actions do GitHub
+
+jobs:
+  build-ui-json:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Necessário para fazer o commit automático
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Process and Sync UI JSON
+        shell: pwsh
+        run: |
+          $manifestPath = "modules/ps7/manifest.json"
+          $uiDir        = "config/ui"
+          $uiPath       = "$uiDir/ui.json"
+
+          # 1. Garante que o diretório target exista
+          if (-not (Test-Path $uiDir)) {
+              New-Item -ItemType Directory -Path $uiDir -Force
+          }
+
+          # 2. Lê a fonte da verdade (manifest.json)
+          if (-not (Test-Path $manifestPath)) {
+              Write-Error "Arquivo $manifestPath não encontrado!"
+              exit 1
+          }
+          $engineManifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+
+          # 3. Carrega ou Inicializa o ui.json
+          if (Test-Path $uiPath) {
+              $uiConfig = Get-Content $uiPath -Raw | ConvertFrom-Json
+          } else {
+              $uiConfig = [PSCustomObject]@{
+                  version = "1.0"
+                  layout  = [PSCustomObject]@{
+                      columns       = 3
+                      sortBy        = "order"
+                      sortDirection = "asc"
+                  }
+                  modules = @()
+              }
+          }
+
+          # Converte a lista existente em ArrayList para manipularmos
+          $uiModules = [System.Collections.ArrayList]@($uiConfig.modules)
+          $existingIds = $uiModules.id
+
+          # 4. Processa cada item da Fonte da Verdade
+          $index = 1
+          foreach ($item in $engineManifest) {
+              # Gera um ID estável baseado no índice e no nome (ex: 01_Wallpaper)
+              $generatedId = "{0:D2}_{1}" -f $index, $item.Name
+
+              # Verifica se o id ou a função já existem no ui.json
+              $alreadyExists = $uiModules | Where-Object { $_.function -eq $item.Function }
+
+              if (-not $alreadyExists) {
+                  $newModule = [PSCustomObject]@{
+                      id          = $generatedId
+                      function    = $item.Function
+                      order       = $index
+                      title       = $item.Name
+                      description = "Módulo de provisionamento automático: $($item.Name)."
+                      category    = "Geral"
+                      icon        = "default-icon"
+                      tags        = @("Geral")
+                      uiProps     = [PSCustomObject]@{
+                          showProgress = $true
+                          allowDisable = $true
+                      }
+                  }
+                  [void]$uiModules.Add($newModule)
+                  Write-Host "➕ Adicionado novo card na UI: $generatedId"
+              } else {
+                  # Atualiza a ordem caso a posição no manifest.json tenha mudado
+                  $alreadyExists.order = $index
+              }
+              $index++
+          }
+
+          # Reatribui e ordena por ordem
+          $uiConfig.modules = $uiModules | Sort-Object order
+
+          # 5. Salva o resultado formatado em config/ui/ui.json
+          $uiConfig | ConvertTo-Json -Depth 10 | Set-Content $uiPath -Encoding utf8
+          Write-Host "✅ ui.json gerado/atualizado com sucesso em $uiPath"
+
+      - name: Commit and Push UI JSON
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(ui): gera e sincroniza ui.json a partir do manifest.json [skip ci]"
+          file_pattern: "config/ui/ui.json"
