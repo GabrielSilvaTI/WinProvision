@@ -93,7 +93,7 @@ jobs:
                   continue
               }
 
-              $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules -Recurse |
+              $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules |
                   Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
               if (-not $results) {
