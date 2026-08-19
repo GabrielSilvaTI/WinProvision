@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Run PSScriptAnalyzer
@@ -15,22 +18,37 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run PowerShell Linter
+      - name: Cache módulos do PowerShell
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/powershell/Modules
+          key: ${{ runner.os }}-psmodules-PSScriptAnalyzer
+
+      - name: Instalar PSScriptAnalyzer
         shell: pwsh
         run: |
-          # 1. Instalação do PSScriptAnalyzer
+          $ErrorActionPreference = 'Stop'
           if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
-              Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
+              Install-Module -Name PSScriptAnalyzer -Repository PSGallery -Force -Scope CurrentUser -SkipPublisherCheck
           }
 
-          # 2. Autocorreção: Converte a codificação para UTF-8 com BOM
-          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1, *.psd1 -Recurse
+      - name: Normalizar codificação para UTF-8 com BOM
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $utf8Bom = [System.Text.UTF8Encoding]::new($true)
+          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1, *.psd1 -Recurse -File
           foreach ($file in $files) {
               $content = Get-Content -Path $file.FullName -Raw
-              [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
+              [System.IO.File]::WriteAllText($file.FullName, $content, $utf8Bom)
           }
 
-          # 3. Regras estéticas, formais e convenções ignoradas
+      - name: Executar análise de lint
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Regras estéticas, formais e convenções ignoradas
           $excludedRules = @(
               'PSAvoidUsingCmdletAliases',
               'PSProvideCommentHelp',
@@ -50,45 +68,51 @@ jobs:
               'PSUseBOMForUnicodeEncodedFile'
           )
 
-          # 4. Diretórios do projeto
+          # Diretórios do projeto
           $pathsToAnalyze = @(
               './modules/ps5',
               './modules/ps7',
               './orquestrador'
           )
 
+          $workspaceRoot = (Get-Location).Path
           $issuesFound = $false
 
           foreach ($path in $pathsToAnalyze) {
-              if (Test-Path $path) {
-                  Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
-                  
-                  # Converte o caminho dos arquivos explicitamente para [string[]]
-                  [string[]]$targetFiles = (Get-ChildItem -Path $path -Include *.ps1, *.psm1, *.psd1 -Recurse).FullName
-                  
-                  if ($targetFiles.Count -gt 0) {
-                      $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules | 
-                          Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
+              if (-not (Test-Path $path)) {
+                  Write-Host "Diretório não encontrado, pulando: $path" -ForegroundColor DarkGray
+                  continue
+              }
 
-                      if ($results) {
-                          $issuesFound = $true
+              Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
 
-                          foreach ($issue in $results) {
-                              $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
-                              Write-Host "::$logType file=$($issue.ScriptPath),line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
-                              
-                              Write-Host "[$($issue.Severity)] $($issue.ScriptName): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
-                              Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
-                              Write-Host "----------------------------------------------------"
-                          }
-                      } else {
-                          Write-Host "Nenhum erro ou aviso funcional em $path." -ForegroundColor Green
-                      }
-                  }
+              [string[]]$targetFiles = (Get-ChildItem -Path $path -Include *.ps1, *.psm1, *.psd1 -Recurse -File).FullName
+
+              if ($targetFiles.Count -eq 0) {
+                  Write-Host "Nenhum arquivo PowerShell encontrado em $path." -ForegroundColor DarkGray
+                  continue
+              }
+
+              $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules -Recurse |
+                  Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
+
+              if (-not $results) {
+                  Write-Host "Nenhum erro ou aviso funcional em $path." -ForegroundColor Green
+                  continue
+              }
+
+              $issuesFound = $true
+              foreach ($issue in $results) {
+                  $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
+                  $relativePath = [System.IO.Path]::GetRelativePath($workspaceRoot, $issue.ScriptPath)
+
+                  Write-Host "::$logType file=$relativePath,line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
+                  Write-Host "[$($issue.Severity)] $($relativePath): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
+                  Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
+                  Write-Host "----------------------------------------------------"
               }
           }
 
-          # 5. Interrompe a execução caso encontre erros de lógica
           if ($issuesFound) {
               Write-Error "Foram encontradas inconsistências funcionais no código. Verifique as anotações no repositório."
               exit 1
