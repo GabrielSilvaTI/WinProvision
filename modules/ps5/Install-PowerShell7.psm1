@@ -195,10 +195,12 @@ function Install-PowerShell7 {
 
         [Parameter()]
         [ValidateRange(5, 300)]
+        [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Usado dentro do scriptblock (closure) passado a -Action de Invoke-WithRetry; o PSScriptAnalyzer não rastreia uso de parâmetros capturados por scriptblocks aninhados repassados como argumento a outra função. Falso positivo conhecido da regra.')]
         [int]$TimeoutSec = 30,
 
         [Parameter()]
         [ValidateRange(30, 900)]
+        [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Usado dentro do scriptblock (closure) passado a -Action de Invoke-WithRetry; o PSScriptAnalyzer não rastreia uso de parâmetros capturados por scriptblocks aninhados repassados como argumento a outra função. Falso positivo conhecido da regra.')]
         [int]$DownloadTimeoutSec = 180
     )
 
