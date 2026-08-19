@@ -1,13 +1,13 @@
-name: PowerShell Linter (PSScriptAnalyzer)
+name: PowerShell Lint
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
     paths:
       - 'modules/**'
       - 'orquestrador/**'
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
     paths:
       - 'modules/**'
       - 'orquestrador/**'
@@ -17,86 +17,71 @@ permissions:
   contents: write
 
 jobs:
-  lint-and-fix:
-    runs-on: ubuntu-latest
-
+  lint:
+    runs-on: windows-latest
     steps:
-      - name: Checkout do Repositório
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ github.head_ref || github.ref_name }}
 
-      - name: Corrigir Encoding (UTF-8 com BOM) nos Diretórios Alvo
-        shell: pwsh
+      - name: Prepare PowerShell Gallery and Install PSScriptAnalyzer
+        shell: powershell
+        run: |
+          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
+          if (-not (Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue)) {
+              Register-PSRepository -Default -ErrorAction SilentlyContinue
+          }
+          Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+
+      - name: Fix Encoding UTF-8 with BOM & Run PSScriptAnalyzer
+        shell: powershell
         run: |
           $targetFolders = @("modules", "orquestrador")
           $extensions    = @("*.ps1", "*.psm1", "*.psd1")
-          
+
+          # 1. Ajusta o encoding UTF-8 com BOM em todos os diretórios e extensões alvo
           foreach ($folder in $targetFolders) {
               if (Test-Path $folder) {
-                  $files = Get-ChildItem -Path $folder -Recurse -Include $extensions
-                  foreach ($file in $files) {
-                      # Lê os bytes e adiciona o BOM do UTF-8 (\xEF\xBB\xBF) caso falte
-                      $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-                      if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
-                          Write-Host "Adicionando UTF-8 BOM ao arquivo: $($file.RelativePath)"
-                          $content = [System.IO.File]::ReadAllText($file.FullName)
-                          [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
+                  Get-ChildItem -Path $folder -Include $extensions -Recurse | ForEach-Object {
+                      $Content = Get-Content -Path $_.FullName -Raw
+                      if ($Content) {
+                          $Content | Out-File -FilePath $_.FullName -Encoding utf8 -Force
                       }
                   }
               }
           }
 
-      - name: Auto-commit das Correções de Encoding
+          # 2. Executa o linter apontando para o manifesto PSScriptAnalyzerSettings.psd1
+          $settingsPath = ".\.github\PSScriptAnalyzerSettings.psd1"
+          [array]$issues = @()
+
+          foreach ($folder in $targetFolders) {
+              if (Test-Path $folder) {
+                  if (Test-Path $settingsPath) {
+                      $issues += Invoke-ScriptAnalyzer -Path $folder -Recurse -Settings $settingsPath
+                  } else {
+                      # Fallback de segurança caso o arquivo de settings não exista
+                      $issues += Invoke-ScriptAnalyzer -Path $folder -Recurse -ExcludeRule @('PSUseBOM', 'PSAvoidUsingCmdletAliases', 'PSUseCorrectCasing') -Severity Error, Warning
+                  }
+              }
+          }
+
+          # 3. Reporta os problemas encontrados
+          if ($issues.Count -gt 0) {
+              foreach ($issue in $issues) {
+                  Write-Output "[$($issue.Severity)] No arquivo: $($issue.ScriptName) (Linha $($issue.Line)): $($issue.Message) [Regra: $($issue.RuleName)]"
+              }
+              Write-Error "Foram encontrados problemas no codigo listados acima."
+              exit 1
+          } else {
+              Write-Host "✅ Análise concluída sem erros em 'modules/' e 'orquestrador/'." -ForegroundColor Green
+          }
+
+      - name: Auto-commit das Correções de Encoding UTF-8
+        if: always()
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style(powershell): aplica encoding UTF-8 com BOM nos scripts"
           file_pattern: "modules/** orquestrador/**"
-
-      - name: Executar Análise de Código
-        shell: pwsh
-        run: |
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
-
-          $targetFolders = @("modules", "orquestrador")
-          $extensions    = @("*.ps1", "*.psm1", "*.psd1")
-          
-          # Regras ruidosas de estilo ignoradas para focar no que realmente importa:
-          # - PSUseBOM: já tratado no passo anterior
-          # - PSAvoidUsingCmdletAliases: ignora se você usou 'dir', 'cls', 'curl' etc.
-          # - PSUseCorrectCasing: ignora avisos de letras maiúsculas/minúsculas em comandos
-          $rulesToExclude = @(
-              'PSUseBOM',
-              'PSAvoidUsingCmdletAliases',
-              'PSUseCorrectCasing'
-          )
-
-          $allIssues = @()
-
-          foreach ($folder in $targetFolders) {
-              if (Test-Path $folder) {
-                  $files = Get-ChildItem -Path $folder -Recurse -Include $extensions
-                  foreach ($file in $files) {
-                      $issues = Invoke-ScriptAnalyzer -Path $file.FullName `
-                          -ExcludeRule $rulesToExclude `
-                          -Severity Error, Warning
-                      
-                      if ($issues) {
-                          $allIssues += $issues
-                      }
-                  }
-              }
-          }
-
-          if ($allIssues.Count -gt 0) {
-              Write-Host "----------------------------------------------------" -ForegroundColor Red
-              Write-Host "Foram encontrados $($allIssues.Count) problemas críticos no código:" -ForegroundColor Red
-              Write-Host "----------------------------------------------------" -ForegroundColor Red
-              
-              $allIssues | Select-Object ScriptPath, Line, Message, RuleName | Format-Table -AutoSize
-              
-              throw "Falha no PSScriptAnalyzer! Corrija os erros apontados acima."
-          } else {
-              Write-Host "✅ Análise concluída! Nenhum erro relevante encontrado em 'modules/' e 'orquestrador/'." -ForegroundColor Green
-          }
