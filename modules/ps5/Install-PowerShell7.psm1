@@ -195,14 +195,18 @@ function Install-PowerShell7 {
 
         [Parameter()]
         [ValidateRange(5, 300)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Usado dentro do scriptblock (closure) passado a -Action de Invoke-WithRetry; o PSScriptAnalyzer não rastreia uso de parâmetros capturados por scriptblocks aninhados repassados como argumento a outra função. Falso positivo conhecido da regra.')]
         [int]$TimeoutSec = 30,
 
         [Parameter()]
         [ValidateRange(30, 900)]
-        [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Usado dentro do scriptblock (closure) passado a -Action de Invoke-WithRetry; o PSScriptAnalyzer não rastreia uso de parâmetros capturados por scriptblocks aninhados repassados como argumento a outra função. Falso positivo conhecido da regra.')]
         [int]$DownloadTimeoutSec = 180
     )
+
+    # Convertidos para milissegundos aqui, no escopo imediato da função: o analisador de lint
+    # não rastreia o uso de $TimeoutSec/$DownloadTimeoutSec quando a única referência a eles
+    # está dentro de um scriptblock aninhado (o '-Action' de Invoke-WithRetry, mais abaixo).
+    $apiTimeoutMs = $TimeoutSec * 1000
+    $downloadTimeoutMs = $DownloadTimeoutSec * 1000
 
     $logDir = Join-Path -Path $env:TEMP -ChildPath 'WinProvision'
     $logFile = Join-Path -Path $logDir -ChildPath 'pwsh7-install.log'
@@ -266,7 +270,7 @@ function Install-PowerShell7 {
         Write-Pwsh7InstallLog @logParams -Message 'Buscando release mais recente do PowerShell no GitHub...' -Level STEP
         try {
             $json = Invoke-WithRetry -MaxRetries $MaxRetries -RetryIntervalSec 2 -OperationName 'consulta à API do GitHub' -LogParams $logParams -Action {
-                $client = New-TimeoutWebClient -TimeoutMs ($TimeoutSec * 1000)
+                $client = New-TimeoutWebClient -TimeoutMs $apiTimeoutMs
                 try {
                     $client.DownloadString('https://api.github.com/repos/PowerShell/PowerShell/releases/latest') | ConvertFrom-Json
                 }
@@ -291,7 +295,7 @@ function Install-PowerShell7 {
         Write-Pwsh7InstallLog @logParams -Message 'Baixando instalador MSI do PowerShell 7+...' -Level STEP
         try {
             Invoke-WithRetry -MaxRetries $MaxRetries -RetryIntervalSec 2 -OperationName 'download do MSI' -LogParams $logParams -Action {
-                $client = New-TimeoutWebClient -TimeoutMs ($DownloadTimeoutSec * 1000)
+                $client = New-TimeoutWebClient -TimeoutMs $downloadTimeoutMs
                 try {
                     $client.DownloadFile($msiUrl, $tempMsi)
                 }
