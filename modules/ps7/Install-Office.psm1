@@ -140,6 +140,11 @@ function Install-Office {
         Timeout, em segundos, para a consulta à API do GitHub.
     .PARAMETER DownloadTimeoutSec
         Timeout, em segundos, para o download do pacote do Office Tool Plus.
+    .PARAMETER FallbackJsonUrl
+        URL do JSON de fallback (mirror próprio no GitHub Releases), usado quando a
+        API do GitHub (YerongAI/Office-Tool/releases/latest) falha ou está fora do ar.
+    .PARAMETER RetryDelaySeconds
+        Tempo de espera, em segundos, entre tentativas de obter e extrair o pacote do OTP.
     .EXAMPLE
         Import-Module .\Install-Office.psd1
         Install-Office
@@ -177,7 +182,15 @@ function Install-Office {
 
         [Parameter()]
         [ValidateRange(30, 900)]
-        [int]$DownloadTimeoutSec = 180
+        [int]$DownloadTimeoutSec = 180,
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$FallbackJsonUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/config/fallback/OTP.json',
+
+        [Parameter()]
+        [ValidateRange(0, 300)]
+        [int]$RetryDelaySeconds = 5
     )
 
     $otpApiUrl = 'https://api.github.com/repos/YerongAI/Office-Tool/releases/latest'
@@ -255,61 +268,106 @@ function Install-Office {
 
         $headers = @{ 'User-Agent' = 'WinProvision' }
 
-        # 2. Consulta à API do GitHub
+        # 2. Consulta à API do GitHub, com fallback para o mirror próprio.
+        # Resolvido uma única vez fora do loop de retry: se a API falhar, cai
+        # pro fallback; o retry abaixo cobre falhas de rede no download/extração,
+        # não repete a consulta.
         Write-OfficeInstallLog @logParams -Message 'Consultando API do GitHub para obter a versão mais recente...' -Level STEP
+
+        $assetUrl = $null
+        $assetVersion = $null
+        $expectedSha256 = $null
+
         try {
             $releaseInfo = Invoke-RestMethod -Uri $otpApiUrl -Headers $headers `
                 -TimeoutSec $TimeoutSec `
                 -MaximumRetryCount $MaxRetries `
                 -RetryIntervalSec 2
+
+            $asset = $releaseInfo.assets | Where-Object name -like 'Office_Tool_with_runtime_*_x64.zip' | Select-Object -First 1
+            if (-not $asset) {
+                throw [FileNotFoundException]::new("Não foi possível encontrar o pacote x64 do OTP na release $($releaseInfo.tag_name).")
+            }
+
+            $assetUrl = $asset.browser_download_url
+            $assetVersion = $releaseInfo.tag_name
         }
         catch {
-            Write-OfficeInstallLog @logParams -Message "Falha ao consultar API do GitHub: $_" -Level ERRO
-            throw [System.Net.WebException]::new("Falha ao consultar a API do GitHub: $_", $_.Exception)
-        }
+            Write-OfficeInstallLog @logParams -Message "Falha ao consultar API do GitHub ($_). Tentando fallback: $FallbackJsonUrl" -Level ERRO
 
-        $asset = $releaseInfo.assets | Where-Object name -like 'Office_Tool_with_runtime_*_x64.zip' | Select-Object -First 1
-        if (-not $asset) {
-            Write-OfficeInstallLog @logParams -Message "Pacote x64 não encontrado no release $($releaseInfo.tag_name)." -Level ERRO
-            throw [FileNotFoundException]::new("Não foi possível encontrar o pacote x64 do OTP na release $($releaseInfo.tag_name).")
-        }
+            try {
+                $fallback = Invoke-RestMethod -Uri $FallbackJsonUrl `
+                    -TimeoutSec $TimeoutSec `
+                    -MaximumRetryCount $MaxRetries `
+                    -RetryIntervalSec 2
 
-        # 3. Download
-        Write-OfficeInstallLog @logParams -Message "Baixando Office Tool Plus ($($releaseInfo.tag_name))..." -Level STEP
-        try {
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipFile -Headers $headers `
-                -TimeoutSec $DownloadTimeoutSec `
-                -MaximumRetryCount $MaxRetries `
-                -RetryIntervalSec 2
+                $assetUrl = $fallback.office_tool.download_url
+                $assetVersion = $fallback.office_tool.version
+                $expectedSha256 = $fallback.office_tool.sha256
 
-            $downloadedFile = Get-Item -Path $zipFile -ErrorAction SilentlyContinue
-            if (-not $downloadedFile -or $downloadedFile.Length -eq 0) {
-                throw 'O arquivo ZIP baixado está ausente ou vazio.'
+                if (-not $assetUrl) {
+                    throw [FileNotFoundException]::new('O JSON de fallback não contém a URL esperada.')
+                }
+
+                Write-OfficeInstallLog @logParams -Message "Usando fallback. Versão: $assetVersion" -Level INFO
+            }
+            catch {
+                Write-OfficeInstallLog @logParams -Message "Falha ao consultar a API do GitHub e o fallback: $_" -Level ERRO
+                throw [System.Net.WebException]::new("Falha ao consultar a API do GitHub e o fallback: $_", $_.Exception)
             }
         }
-        catch {
-            Write-OfficeInstallLog @logParams -Message "Falha no download do OTP: $_" -Level ERRO
-            throw
-        }
 
-        # 4. Extração
-        Write-OfficeInstallLog @logParams -Message 'Extraindo arquivos do OTP...' -Level STEP
-        try {
-            Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
-        }
-        catch {
-            Write-OfficeInstallLog @logParams -Message "Falha ao extrair pacote do OTP: $_" -Level ERRO
-            throw
-        }
+        # 3-5. Download, verificação, extração e localização do executável, com retry.
+        # Cobre falhas transitórias de rede: baixa de novo do zero a cada tentativa.
+        $exePath = $null
+        $workingFolder = $null
+        $attempt = 0
 
-        # 5. Localização do executável
-        $exeItem = Get-ChildItem -Path $tempDir -Filter $exeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $exeItem) {
-            Write-OfficeInstallLog @logParams -Message "Executável '$exeName' não localizado." -Level ERRO
-            throw [FileNotFoundException]::new("O executável '$exeName' não foi localizado após a extração.")
-        }
-        $exePath = $exeItem.FullName
-        $workingFolder = $exeItem.DirectoryName
+        do {
+            $attempt++
+            try {
+                Write-OfficeInstallLog @logParams -Message "Baixando Office Tool Plus ($assetVersion), tentativa $attempt/$MaxRetries..." -Level STEP
+                Invoke-WebRequest -Uri $assetUrl -OutFile $zipFile -Headers $headers `
+                    -TimeoutSec $DownloadTimeoutSec `
+                    -MaximumRetryCount 1 `
+                    -RetryIntervalSec 2
+
+                $downloadedFile = Get-Item -Path $zipFile -ErrorAction SilentlyContinue
+                if (-not $downloadedFile -or $downloadedFile.Length -eq 0) {
+                    throw 'O arquivo ZIP baixado está ausente ou vazio.'
+                }
+
+                if ($expectedSha256) {
+                    $actualHash = (Get-FileHash -Path $zipFile -Algorithm SHA256).Hash
+                    if ($actualHash -ne $expectedSha256) {
+                        throw "SHA256 inválido. Esperado: $expectedSha256. Obtido: $actualHash."
+                    }
+                    Write-OfficeInstallLog @logParams -Message 'SHA256 verificado.' -Level INFO
+                }
+
+                Write-OfficeInstallLog @logParams -Message 'Extraindo arquivos do OTP...' -Level STEP
+                Expand-Archive -Path $zipFile -DestinationPath $tempDir -Force
+
+                $exeItem = Get-ChildItem -Path $tempDir -Filter $exeName -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $exeItem) {
+                    throw [FileNotFoundException]::new("O executável '$exeName' não foi localizado após a extração.")
+                }
+                $exePath = $exeItem.FullName
+                $workingFolder = $exeItem.DirectoryName
+            }
+            catch {
+                Write-OfficeInstallLog @logParams -Message "Falha ao obter/extrair o OTP na tentativa $attempt/$MaxRetries`: $_" -Level ERRO
+
+                Remove-Item -Path $zipFile -Force -ErrorAction SilentlyContinue
+                Get-ChildItem -Path $tempDir -Exclude 'OTP.zip' -ErrorAction SilentlyContinue |
+                    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+                if ($attempt -ge $MaxRetries) {
+                    throw
+                }
+                Start-Sleep -Seconds $RetryDelaySeconds
+            }
+        } while (-not $exePath -and $attempt -lt $MaxRetries)
 
         # 6. Execução do OTP Console
         Write-OfficeInstallLog @logParams -Message 'Iniciando a instalação do Office...' -Level STEP
