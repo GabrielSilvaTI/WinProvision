@@ -1,0 +1,90 @@
+{
+  "version": "1.0",
+  "layout": {
+    "columns": 3,
+    "sortBy": "order",
+    "sortDirection": "asc"
+  },
+  "modules": [
+    {
+      "id": "01_Wallpaper",
+      "function": "Set-Wallpaper",
+      "order": 1,
+      "title": "Wallpaper",
+      "description": "Módulo de provisionamento automático: Wallpaper.",
+      "category": "Geral",
+      "icon": "default-icon",
+      "tags": [
+        "Geral"
+      ],
+      "uiProps": {
+        "showProgress": true,
+        "allowDisable": true
+      }
+    },
+    {
+      "id": "02_Install-Winget",
+      "function": "Install-Winget",
+      "order": 2,
+      "title": "Install-Winget",
+      "description": "Módulo de provisionamento automático: Install-Winget.",
+      "category": "Geral",
+      "icon": "default-icon",
+      "tags": [
+        "Geral"
+      ],
+      "uiProps": {
+        "showProgress": true,
+        "allowDisable": true
+      }
+    },
+    {
+      "id": "03_Install-Programas",
+      "function": "Install-Programas",
+      "order": 3,
+      "title": "Install-Programas",
+      "description": "Módulo de provisionamento automático: Install-Programas.",
+      "category": "Geral",
+      "icon": "default-icon",
+      "tags": [
+        "Geral"
+      ],
+      "uiProps": {
+        "showProgress": true,
+        "allowDisable": true
+      }
+    },
+    {
+      "id": "04_Install-Office",
+      "function": "Install-Office",
+      "order": 4,
+      "title": "Install-Office",
+      "description": "Módulo de provisionamento automático: Install-Office.",
+      "category": "Geral",
+      "icon": "default-icon",
+      "tags": [
+        "Geral"
+      ],
+      "uiProps": {
+        "showProgress": true,
+        "allowDisable": true
+      }
+    },
+    {
+      "id": "05_OfficeFinale",
+      "function": "Invoke-OfficeFinale",
+      "order": 5,
+      "title": "OfficeFinale",
+      "description": "Módulo de provisionamento automático: OfficeFinale.",
+      "category": "Geral",
+      "icon": "default-icon",
+      "tags": [
+        "Geral"
+      ],
+      "uiProps": {
+        "showProgress": true,
+        "allowDisable": true
+      }
+    }
+  ]
+}
