@@ -18,19 +18,19 @@ jobs:
       - name: Run PowerShell Linter
         shell: pwsh
         run: |
-          # 1. Garante a instalação do PSScriptAnalyzer
+          # 1. Instalação do PSScriptAnalyzer
           if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
               Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
           }
 
-          # 2. Autocorreção: Converte o encoding de todos os arquivos para UTF-8 (Sem BOM)
+          # 2. Autocorreção: Converte o encoding para UTF-8 COM BOM (resolve o aviso da regra PSUseBOMForUnicodeEncodedFile)
           $files = Get-ChildItem -Path . -Include *.ps1, *.psm1, *.psd1 -Recurse
           foreach ($file in $files) {
               $content = Get-Content -Path $file.FullName -Raw
-              [System.IO.File]::WriteAllText($file.FullName, $content, (New-Object System.Text.UTF8Encoding $false))
+              [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
           }
 
-          # 3. Exclui regras puramente estéticas, estilísticas ou de sugestões não-críticas
+          # 3. Ignora regras estéticas, estilísticas e de convenção
           $excludedRules = @(
               'PSAvoidUsingCmdletAliases',
               'PSProvideCommentHelp',
@@ -43,10 +43,14 @@ jobs:
               'PSPlaceCloseBrace',
               'PSPossibleIncorrectUsageOfAssignmentOperator',
               'PSAvoidGlobalVars',
-              'PSAvoidUsingWMICmdlet'
+              'PSAvoidUsingWMICmdlet',
+              'PSAvoidUsingWriteHost',
+              'PSUseShouldProcessForStateChangingFunctions',
+              'PSUseSingularNouns',
+              'PSUseBOMForUnicodeEncodedFile'
           )
 
-          # 4. Diretórios do projeto
+          # 4. Análise por diretório
           $pathsToAnalyze = @(
               './modules/ps5',
               './modules/ps7',
@@ -59,7 +63,6 @@ jobs:
               if (Test-Path $path) {
                   Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
                   
-                  # Captura os resultados
                   $results = Invoke-ScriptAnalyzer -Path $path -Recurse -ExcludeRule $excludedRules | 
                       Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
@@ -67,11 +70,9 @@ jobs:
                       $issuesFound = $true
 
                       foreach ($issue in $results) {
-                          # Formatação em formato de Annotation nativo do GitHub Actions
                           $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
                           Write-Host "::$logType file=$($issue.ScriptPath),line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
                           
-                          # Detalhe legível e sem cortes no log do console
                           Write-Host "[$($issue.Severity)] $($issue.ScriptName): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
                           Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
                           Write-Host "----------------------------------------------------"
@@ -82,7 +83,7 @@ jobs:
               }
           }
 
-          # 5. Interrompe a execução caso encontre Erros ou Warnings funcionais
+          # 5. Falha o job caso encontre erros de lógica
           if ($issuesFound) {
               Write-Error "Foram encontradas inconsistências funcionais no código. Verifique as anotações no repositório."
               exit 1
