@@ -3,7 +3,7 @@
     RootModule           = 'Install-Winget.psm1'
 
     # Versão do Módulo
-    ModuleVersion        = '1.1.0'
+    ModuleVersion        = '1.2.0'
 
     # Identificador único do Módulo (GUID)
     GUID                 = '3f8e5c12-98ab-41c6-a213-7d829e2f1110'
