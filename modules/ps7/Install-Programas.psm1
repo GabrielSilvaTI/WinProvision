@@ -221,17 +221,6 @@ function Install-Programas {
         throw [System.InvalidOperationException]::new('winget não está disponível no PATH desta sessão.')
     }
 
-    # 0.1 Aquecimento: força a sincronização das fontes agora, fora do loop.
-    # winget sincroniza o índice das fontes automaticamente na primeira chamada
-    # da sessão, e isso é o que deixa o primeiro pacote (install/upgrade)
-    # visivelmente mais lento que os demais. Adiantar aqui evita que esse
-    # custo seja contabilizado, e cobrado, no primeiro pacote do loop.
-    Write-WinProvisionLog -Message 'Sincronizando fontes do winget...' -LogFile $logFile -Level STEP
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $null = winget source update 2>&1
-    $sw.Stop()
-    Write-WinProvisionLog -Message "Fontes sincronizadas em $($sw.Elapsed.TotalSeconds.ToString('0.0'))s." -LogFile $logFile -Level OK
-
     # 1. Download do JSON
     Write-WinProvisionLog -Message 'Baixando arquivo de configuração...' -LogFile $logFile -Level STEP
 
@@ -264,6 +253,18 @@ function Install-Programas {
     foreach ($pkg in $packages) {
         Write-Host "  - $($pkg.Id)" -ForegroundColor Gray
     }
+
+    # 2.1 Aquecimento: ativa o WindowsPackageManagerServer.exe (backend COM do
+    # winget) agora, logo antes do loop. A primeira chamada de qualquer sessão
+    # sobe esse processo do zero, o que é o real motivo do primeiro pacote
+    # demorar mais que os outros; chamadas seguintes reaproveitam o processo
+    # já ativo. Fazer isso antes do download do JSON não ajuda: o servidor
+    # fica ocioso só por alguns segundos e cai antes do loop começar.
+    Write-WinProvisionLog -Message 'Aquecendo backend do winget...' -LogFile $logFile -Level STEP
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $null = winget source update 2>&1
+    $sw.Stop()
+    Write-WinProvisionLog -Message "Backend aquecido em $($sw.Elapsed.TotalSeconds.ToString('0.0'))s." -LogFile $logFile -Level OK
 
     # 3. Loop principal
     Write-WinProvisionLog -Message 'Verificando e instalando/atualizando pacotes...' -LogFile $logFile -Level STEP
