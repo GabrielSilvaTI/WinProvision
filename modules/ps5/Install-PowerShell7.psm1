@@ -188,10 +188,17 @@ function Get-Pwsh7FallbackInfo {
         [hashtable]$LogParams
     )
 
+    # Copiados para variáveis locais aqui, no escopo imediato da função: o analisador de lint
+    # não rastreia o uso de $FallbackUrl/$TimeoutMs quando a única referência a eles está
+    # dentro de um scriptblock aninhado (o '-Action' de Invoke-WithRetry, logo abaixo) —
+    # mesmo caso de $TimeoutSec/$DownloadTimeoutSec em Install-PowerShell7.
+    $url = $FallbackUrl
+    $timeoutMsLocal = $TimeoutMs
+
     $data = Invoke-WithRetry -MaxRetries $MaxRetries -RetryIntervalSec 2 -OperationName 'consulta ao JSON de fallback' -LogParams $LogParams -Action {
-        $client = New-TimeoutWebClient -TimeoutMs $TimeoutMs
+        $client = New-TimeoutWebClient -TimeoutMs $timeoutMsLocal
         try {
-            $client.DownloadString($FallbackUrl) | ConvertFrom-Json
+            $client.DownloadString($url) | ConvertFrom-Json
         }
         finally {
             $client.Dispose()
