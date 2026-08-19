@@ -23,14 +23,14 @@ jobs:
               Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
           }
 
-          # 2. Autocorreção: Converte o encoding para UTF-8 COM BOM (resolve o aviso da regra PSUseBOMForUnicodeEncodedFile)
+          # 2. Autocorreção: Converte a codificação para UTF-8 com BOM
           $files = Get-ChildItem -Path . -Include *.ps1, *.psm1, *.psd1 -Recurse
           foreach ($file in $files) {
               $content = Get-Content -Path $file.FullName -Raw
               [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
           }
 
-          # 3. Ignora regras estéticas, estilísticas e de convenção
+          # 3. Regras estéticas, formais e convenções ignoradas
           $excludedRules = @(
               'PSAvoidUsingCmdletAliases',
               'PSProvideCommentHelp',
@@ -50,7 +50,7 @@ jobs:
               'PSUseBOMForUnicodeEncodedFile'
           )
 
-          # 4. Análise por diretório
+          # 4. Diretórios do projeto
           $pathsToAnalyze = @(
               './modules/ps5',
               './modules/ps7',
@@ -63,27 +63,32 @@ jobs:
               if (Test-Path $path) {
                   Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
                   
-                  $results = Invoke-ScriptAnalyzer -Path $path -Recurse -ExcludeRule $excludedRules | 
-                      Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
+                  # Captura individualmente os arquivos do diretório para evitar o erro de parâmetro 'Function'
+                  $targetFiles = Get-ChildItem -Path $path -Include *.ps1, *.psm1, *.psd1 -Recurse
+                  
+                  if ($targetFiles) {
+                      $results = Invoke-ScriptAnalyzer -Path $targetFiles.FullName -ExcludeRule $excludedRules | 
+                          Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
-                  if ($results) {
-                      $issuesFound = $true
+                      if ($results) {
+                          $issuesFound = $true
 
-                      foreach ($issue in $results) {
-                          $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
-                          Write-Host "::$logType file=$($issue.ScriptPath),line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
-                          
-                          Write-Host "[$($issue.Severity)] $($issue.ScriptName): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
-                          Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
-                          Write-Host "----------------------------------------------------"
+                          foreach ($issue in $results) {
+                              $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
+                              Write-Host "::$logType file=$($issue.ScriptPath),line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
+                              
+                              Write-Host "[$($issue.Severity)] $($issue.ScriptName): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
+                              Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
+                              Write-Host "----------------------------------------------------"
+                          }
+                      } else {
+                          Write-Host "Nenhum erro ou aviso funcional em $path." -ForegroundColor Green
                       }
-                  } else {
-                      Write-Host "Nenhum erro ou aviso funcional em $path." -ForegroundColor Green
                   }
               }
           }
 
-          # 5. Falha o job caso encontre erros de lógica
+          # 5. Interrompe a execução caso encontre Erros ou Warnings funcionais
           if ($issuesFound) {
               Write-Error "Foram encontradas inconsistências funcionais no código. Verifique as anotações no repositório."
               exit 1
