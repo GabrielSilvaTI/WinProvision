@@ -1,11 +1,11 @@
 @{
     # Identificação do Módulo
-    ModuleVersion = '1.1.0'
+    ModuleVersion = '1.2.0'
     GUID          = 'a2c89e47-5d2b-4f90-8e12-369b0a1f72d4'
     Author        = 'Gabriel'
     CompanyName   = 'Automação'
     Copyright     = '(c) 2026. Todos os direitos reservados.'
-    Description   = 'Módulo para verificação e instalação automática do PowerShell 7+ via GitHub Releases.'
+    Description   = 'Módulo para verificação e instalação automática do PowerShell 7+ via GitHub Releases, com fallback para um JSON "fonte da verdade" e retry em todas as requisições HTTP.'
 
     # Requisitos do Ambiente
     # Mantido em 5.1 propositalmente: este módulo é o ponto de entrada do provisionamento
@@ -32,7 +32,7 @@
     # Informações Privadas
     PrivateData = @{
         PSData = @{
-            Tags = @('PowerShell7', 'Install', 'Automation', 'GitHub')
+            Tags = @('PowerShell7', 'Install', 'Automation', 'GitHub', 'Fallback', 'Retry')
         }
     }
 }
