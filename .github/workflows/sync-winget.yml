@@ -1,0 +1,125 @@
+name: Sync WinGet Fallback
+
+on:
+  schedule:
+    - cron: '0 5 * * *' # Executa diariamente às 05:00 UTC
+  workflow_dispatch: # Permite execução manual pelo painel do GitHub
+
+permissions:
+  contents: write
+
+jobs:
+  update-winget-fallback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Buscar Última Release do WinGet CLI
+        id: get_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Obtém a tag da última versão do WinGet CLI (ex: v1.29.280)
+          LATEST_TAG=$(gh release view --repo microsoft/winget-cli --json tagName -q .tagName)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          
+          # Remove o 'v' inicial para extrair a versão limpa (ex: 1.29.280)
+          VERSION=${LATEST_TAG#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Garantir existência do manifesto e verificar versão
+        run: |
+          # Cria o diretório config/fallback caso não exista
+          mkdir -p config/fallback
+
+          # Se o winget.json não existir, cria com estrutura inicial
+          if [ ! -f config/fallback/winget.json ]; then
+            echo "{}" > config/fallback/winget.json
+          fi
+
+          # Lê a versão atual salva no winget.json
+          CURRENT_VERSION=$(jq -r '.winget.version // ""' config/fallback/winget.json)
+
+          if [ "$VERSION" != "$CURRENT_VERSION" ]; then
+            echo "NEW_VERSION_NEEDED=true" >> $GITHUB_ENV
+            echo "Nova versão do WinGet detectada: $VERSION (Versão atual no manifesto: '$CURRENT_VERSION')"
+          else
+            echo "NEW_VERSION_NEEDED=false" >> $GITHUB_ENV
+            echo "A versão do WinGet no fallback já é a mais recente ($VERSION)."
+          fi
+
+      - name: Baixar Pacotes, Publicar na Release Fixa e Atualizar Manifesto
+        if: env.NEW_VERSION_NEEDED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./downloads
+
+          # 1. Baixa os dois arquivos exatos da versão mais recente
+          gh release download ${{ env.LATEST_TAG }} \
+            --repo microsoft/winget-cli \
+            --pattern "*msixbundle" \
+            --pattern "*Dependencies.zip" \
+            --dir ./downloads
+
+          # Identifica os nomes dos arquivos baixados
+          MSIX_FILE=$(basename $(ls ./downloads/*.msixbundle | head -n 1))
+          DEPS_FILE=$(basename $(ls ./downloads/*Dependencies.zip | head -n 1))
+
+          echo "Arquivo MSIX: $MSIX_FILE"
+          echo "Arquivo Dependências: $DEPS_FILE"
+
+          # 2. Calcula os Hashes SHA256 dos dois arquivos
+          MSIX_HASH=$(sha256sum "./downloads/$MSIX_FILE" | awk '{print $1}')
+          DEPS_HASH=$(sha256sum "./downloads/$DEPS_FILE" | awk '{print $1}')
+
+          # 3. Faz o upload dos arquivos na Release com Tag Fixa 'fallbacks'
+          TAG_FIXA="fallbacks"
+
+          gh release upload $TAG_FIXA "./downloads/$MSIX_FILE" "./downloads/$DEPS_FILE" --clobber || \
+          gh release create $TAG_FIXA "./downloads/$MSIX_FILE" "./downloads/$DEPS_FILE" \
+            --title "WinProvision - Pacotes de Fallback" \
+            --notes "Repositório central de artefatos e instaladores de fallback do WinProvision."
+
+          # 4. Monta as URLs fixas de download do repositório
+          MY_REPO="${{ github.repository }}"
+          MSIX_URL="https://github.com/${MY_REPO}/releases/download/${TAG_FIXA}/${MSIX_FILE}"
+          DEPS_URL="https://github.com/${MY_REPO}/releases/download/${TAG_FIXA}/${DEPS_FILE}"
+
+          # 5. Atualiza o manifesto config/fallback/winget.json com ambos os pacotes
+          jq --arg ver "$VERSION" \
+             --arg msix_file "$MSIX_FILE" \
+             --arg msix_url "$MSIX_URL" \
+             --arg msix_sha "$MSIX_HASH" \
+             --arg deps_file "$DEPS_FILE" \
+             --arg deps_url "$DEPS_URL" \
+             --arg deps_sha "$DEPS_HASH" \
+             '.winget = {
+                version: $ver,
+                installer: {
+                  filename: $msix_file,
+                  download_url: $msix_url,
+                  sha256: $msix_sha
+                },
+                dependencies: {
+                  filename: $deps_file,
+                  download_url: $deps_url,
+                  sha256: $deps_sha
+                },
+                updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))
+              }' \
+             config/fallback/winget.json > config/fallback/winget.tmp.json
+
+          mv config/fallback/winget.tmp.json config/fallback/winget.json
+
+      - name: Commit e Push do Manifesto
+        if: env.NEW_VERSION_NEEDED == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "auto(fallback): atualiza WinGet e dependências para a versão ${{ env.VERSION }}"
+          file_pattern: "config/fallback/winget.json"
