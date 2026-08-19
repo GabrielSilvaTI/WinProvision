@@ -52,6 +52,9 @@ function Install-Winget {
         Timeout, em segundos, para cada requisição HTTP (consulta ao GitHub e downloads).
     .PARAMETER MaxRetries
         Número máximo de tentativas para cada requisição HTTP.
+    .PARAMETER FallbackJsonUrl
+        URL do JSON de fallback (mirror próprio no GitHub Releases), usado quando a
+        API do GitHub (microsoft/winget-cli/releases/latest) falha ou está fora do ar.
     .EXAMPLE
         Install-Winget -Verbose
     .EXAMPLE
@@ -69,7 +72,10 @@ function Install-Winget {
         [int]$TimeoutSec = 30,
 
         [ValidateRange(1, 10)]
-        [int]$MaxRetries = 3
+        [int]$MaxRetries = 3,
+
+        [ValidateNotNullOrEmpty()]
+        [string]$FallbackJsonUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/config/fallback/winget.json'
     )
 
     # 1. Validação de privilégios administrativos
@@ -92,8 +98,14 @@ function Install-Winget {
     $osArch = $env:PROCESSOR_ARCHITEW6432 ?? $env:PROCESSOR_ARCHITECTURE
     $archTag = $osArch -eq 'ARM64' ? 'arm64' : 'x64'
 
-    # 4. Consulta de assets via GitHub API
+    # 4. Consulta de assets via GitHub API, com fallback para o mirror próprio
     Write-Host 'Buscando assets da versão mais recente do winget...' -ForegroundColor Cyan
+
+    $depsZipUrl = $null
+    $msixBundleUrl = $null
+    $depsSha256 = $null
+    $msixSha256 = $null
+
     try {
         $ghHeaders = @{
             'User-Agent' = 'PowerShell-Winget-Installer'
@@ -108,13 +120,35 @@ function Install-Winget {
 
         $depsZipUrl = ($release.assets | Where-Object Name -like '*Dependencies.zip' | Select-Object -First 1).browser_download_url
         $msixBundleUrl = ($release.assets | Where-Object Name -like '*.msixbundle' | Select-Object -First 1).browser_download_url
+
+        if (-not $depsZipUrl -or -not $msixBundleUrl) {
+            throw [System.IO.FileNotFoundException]::new('Um ou mais assets necessários não foram encontrados no release do GitHub.')
+        }
     }
     catch {
-        throw [System.Net.WebException]::new("Falha ao consultar API do GitHub: $_", $_.Exception)
-    }
+        Write-Warning "Falha ao consultar a API do GitHub ($_). Tentando fallback: $FallbackJsonUrl"
 
-    if (-not $depsZipUrl -or -not $msixBundleUrl) {
-        throw [System.IO.FileNotFoundException]::new('Um ou mais assets necessários não foram encontrados no release do GitHub.')
+        try {
+            $fallback = Invoke-RestMethod -Uri $FallbackJsonUrl `
+                -TimeoutSec $TimeoutSec `
+                -MaximumRetryCount $MaxRetries `
+                -RetryIntervalSec 2 `
+                -ErrorAction Stop
+
+            $depsZipUrl = $fallback.winget.dependencies.download_url
+            $msixBundleUrl = $fallback.winget.installer.download_url
+            $depsSha256 = $fallback.winget.dependencies.sha256
+            $msixSha256 = $fallback.winget.installer.sha256
+
+            if (-not $depsZipUrl -or -not $msixBundleUrl) {
+                throw [System.IO.FileNotFoundException]::new('O JSON de fallback não contém as URLs esperadas.')
+            }
+
+            Write-Host "Usando fallback. Versão: $($fallback.winget.version)" -ForegroundColor Yellow
+        }
+        catch {
+            throw [System.Net.WebException]::new("Falha ao consultar a API do GitHub e o fallback: $_", $_.Exception)
+        }
     }
 
     # 5. Preparação do diretório temporário de trabalho
@@ -122,8 +156,8 @@ function Install-Winget {
     $null = New-Item -ItemType Directory -Path $workDir -Force
 
     $downloads = @(
-        @{ Uri = $depsZipUrl; Out = Join-Path $workDir 'DesktopAppInstaller_Dependencies.zip' }
-        @{ Uri = $msixBundleUrl; Out = Join-Path $workDir 'Microsoft.DesktopAppInstaller.msixbundle' }
+        @{ Uri = $depsZipUrl; Out = Join-Path $workDir 'DesktopAppInstaller_Dependencies.zip'; ExpectedSha256 = $depsSha256 }
+        @{ Uri = $msixBundleUrl; Out = Join-Path $workDir 'Microsoft.DesktopAppInstaller.msixbundle'; ExpectedSha256 = $msixSha256 }
     )
 
     try {
@@ -146,6 +180,14 @@ function Install-Winget {
             $file = Get-Item -Path $download.Out -ErrorAction SilentlyContinue
             if (-not $file -or $file.Length -eq 0) {
                 throw "Arquivo ausente ou vazio: $($download.Out)"
+            }
+
+            if ($download.ExpectedSha256) {
+                $actualHash = (Get-FileHash -Path $file.FullName -Algorithm SHA256).Hash
+                if ($actualHash -ne $download.ExpectedSha256) {
+                    throw "SHA256 inválido para '$($file.Name)'. Esperado: $($download.ExpectedSha256). Obtido: $actualHash."
+                }
+                Write-Host "  - $($file.Name): SHA256 verificado." -ForegroundColor DarkGray
             }
         }
 
