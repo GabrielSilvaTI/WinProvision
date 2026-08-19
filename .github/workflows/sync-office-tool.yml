@@ -87,10 +87,10 @@ jobs:
           # Deleta a tag local/remota da release anterior se por acaso já existir
           gh release delete "$MY_TAG" -y --cleanup-tag || true
 
-          # Cria a Release no seu repositório com o asset do .zip
+          # Cria a Release no seu repositório com título e descrição simplificados
           gh release create "$MY_TAG" "./downloads/${{ env.FILE_NAME }}" \
-            --title "Fallback Office Tool Plus ${{ env.LATEST_TAG }}" \
-            --notes "Espelho de Fallback automatizado do Office Tool Plus versão ${{ env.VERSION }} para o WinProvision. SHA256: $HASH"
+            --title "Office Tool Plus ${{ env.VERSION }}" \
+            --notes "Fallback autônomo do Office Tool Plus (OTP)"
 
           # 4. Monta a URL direta de download do SEU repositório
           MY_REPO="${{ github.repository }}"
