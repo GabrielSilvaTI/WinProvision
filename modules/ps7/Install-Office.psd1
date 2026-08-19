@@ -3,7 +3,7 @@
     RootModule           = 'Install-Office.psm1'
 
     # Versão deste módulo
-    ModuleVersion        = '1.2.0'
+    ModuleVersion        = '1.3.0'
 
     # ID Usado para identificar este módulo exclusivamente (GUID)
     GUID                 = 'd7a4e219-81bc-4e20-91a5-8c9e51b1f9e2'
