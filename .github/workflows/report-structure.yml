@@ -1,0 +1,28 @@
+name: Estrutura do Repositório
+
+on:
+  workflow_dispatch: # Permite rodar manualmente a qualquer momento na aba Actions
+  push:
+    branches: [ main, master ] # Roda automaticamente ao fazer push na branch principal
+
+jobs:
+  report-tree:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do Repositório
+        uses: actions/checkout@v4
+
+      - name: Instalar ferramenta Tree
+        run: sudo apt-get update && sudo apt-get install -y tree
+
+      - name: Gerar Árvore do Repositório
+        run: |
+          echo "=== ESTRUTURA DO REPOSITÓRIO ===" > tree_report.txt
+          tree -I '.git' >> tree_report.txt
+          cat tree_report.txt
+
+      - name: Salvar Relatório como Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: estrutura-repositorio
+          path: tree_report.txt
