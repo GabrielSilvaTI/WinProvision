@@ -14,9 +14,29 @@ jobs:
 
       - name: Gerar Árvore do Repositório
         run: |
-          echo "=== ESTRUTURA DO REPOSITÓRIO ===" > tree_report.txt
-          npx tree-node --ignore .git >> tree_report.txt
-          cat tree_report.txt
+          python3 -c "
+          import os
+
+          def print_tree(startpath):
+              output = ['=== ESTRUTURA DO REPOSITÓRIO ===\n']
+              for root, dirs, files in os.walk(startpath):
+                  # Ignora a pasta .git
+                  if '.git' in dirs:
+                      dirs.remove('.git')
+                  
+                  level = root.replace(startpath, '').count(os.sep)
+                  indent = '│   ' * (level)
+                  output.append(f'{indent}├── {os.path.basename(root)}/')
+                  subindent = '│   ' * (level + 1)
+                  for f in files:
+                      output.append(f'{subindent}├── {f}')
+              return '\n'.join(output)
+
+          report = print_tree('.')
+          print(report)
+          with open('tree_report.txt', 'w', encoding='utf-8') as f:
+              f.write(report)
+          "
 
       - name: Salvar Relatório como Artefato
         uses: actions/upload-artifact@v4
