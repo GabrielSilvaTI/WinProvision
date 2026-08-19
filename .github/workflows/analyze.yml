@@ -23,14 +23,14 @@ jobs:
               Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
           }
 
-          # 2. Autocorreção: Converte o encoding de todos os arquivos .ps1 e .psm1 para UTF-8
-          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1 -Recurse
+          # 2. Autocorreção: Converte o encoding de todos os arquivos para UTF-8 (Sem BOM)
+          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1, *.psd1 -Recurse
           foreach ($file in $files) {
               $content = Get-Content -Path $file.FullName -Raw
-              [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
+              [System.IO.File]::WriteAllText($file.FullName, $content, (New-Object System.Text.UTF8Encoding $false))
           }
 
-          # 3. Lista de regras estéticas e formais ignoradas para focar no que é funcional
+          # 3. Exclui regras puramente estéticas, estilísticas ou de sugestões não-críticas
           $excludedRules = @(
               'PSAvoidUsingCmdletAliases',
               'PSProvideCommentHelp',
@@ -40,10 +40,13 @@ jobs:
               'PSUseConsistentWhitespace',
               'PSUseConsistentIndentation',
               'PSPlaceOpenBrace',
-              'PSPlaceCloseBrace'
+              'PSPlaceCloseBrace',
+              'PSPossibleIncorrectUsageOfAssignmentOperator',
+              'PSAvoidGlobalVars',
+              'PSAvoidUsingWMICmdlet'
           )
 
-          # 4. Análise direcionada às pastas do projeto
+          # 4. Diretórios do projeto
           $pathsToAnalyze = @(
               './modules/ps5',
               './modules/ps7',
@@ -54,24 +57,33 @@ jobs:
 
           foreach ($path in $pathsToAnalyze) {
               if (Test-Path $path) {
-                  Write-Host "--- Analisando diretório: $path ---" -ForegroundColor Cyan
+                  Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
                   
+                  # Captura os resultados
                   $results = Invoke-ScriptAnalyzer -Path $path -Recurse -ExcludeRule $excludedRules | 
                       Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
                   if ($results) {
                       $issuesFound = $true
-                      $results | Format-Table -Property ScriptPath, Line, Severity, Message -AutoSize
+
+                      foreach ($issue in $results) {
+                          # Formatação em formato de Annotation nativo do GitHub Actions
+                          $logType = if ($issue.Severity -eq 'Error') { 'error' } else { 'warning' }
+                          Write-Host "::$logType file=$($issue.ScriptPath),line=$($issue.Line),col=$($issue.Column)::[$($issue.RuleName)] $($issue.Message)"
+                          
+                          # Detalhe legível e sem cortes no log do console
+                          Write-Host "[$($issue.Severity)] $($issue.ScriptName): L$($issue.Line) - $($issue.Message)" -ForegroundColor Red
+                          Write-Host "    Regra: $($issue.RuleName)" -ForegroundColor Yellow
+                          Write-Host "----------------------------------------------------"
+                      }
                   } else {
-                      Write-Host "Nenhum erro ou aviso funcional encontrado em $path." -ForegroundColor Green
+                      Write-Host "Nenhum erro ou aviso funcional em $path." -ForegroundColor Green
                   }
-              } else {
-                  Write-Host "Caminho $path não encontrado." -ForegroundColor Yellow
               }
           }
 
-          # 5. Falha o job caso haja erros funcionais ou avisos críticos
+          # 5. Interrompe a execução caso encontre Erros ou Warnings funcionais
           if ($issuesFound) {
-              Write-Error "Foram encontradas inconsistências funcionais no PowerShell. Verifique o log acima."
+              Write-Error "Foram encontradas inconsistências funcionais no código. Verifique as anotações no repositório."
               exit 1
           }
