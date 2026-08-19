@@ -1,0 +1,16 @@
+{
+  "winget": {
+    "version": "1.29.280",
+    "installer": {
+      "filename": "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle",
+      "download_url": "https://github.com/GabrielSilvaTI/WinProvision/releases/download/fallbacks/Microsoft.DesktopAppInstaller_8wekyb3d8bbwe.msixbundle",
+      "sha256": "0809fa9f52e395d6e7de692331dce847ac991952675116bb4d8aae2ddcc20946"
+    },
+    "dependencies": {
+      "filename": "DesktopAppInstaller_Dependencies.zip",
+      "download_url": "https://github.com/GabrielSilvaTI/WinProvision/releases/download/fallbacks/DesktopAppInstaller_Dependencies.zip",
+      "sha256": "3bbfcaa5cb011c48fac48d896d64a5c7c6898859a9f3d01555c8cd000f4e2962"
+    },
+    "updated_at": "2026-08-19 01:44:27Z"
+  }
+}
