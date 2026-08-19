@@ -46,13 +46,13 @@ jobs:
           # Cria o diretório 'config' caso não exista
           mkdir -p config
 
-          # Se o manifesto não existir, cria com estrutura JSON inicial válida
-          if [ ! -f config/manifest.json ]; then
-            echo "{}" > config/manifest.json
+          # Se o manifesto OTP.json não existir, cria com estrutura JSON inicial válida
+          if [ ! -f config/OTP.json ]; then
+            echo "{}" > config/OTP.json
           fi
 
-          # Lê a versão atual registrada no manifesto
-          CURRENT_VERSION=$(jq -r '.office_tool.version // ""' config/manifest.json)
+          # Lê a versão atual registrada no manifesto OTP.json
+          CURRENT_VERSION=$(jq -r '.office_tool.version // ""' config/OTP.json)
 
           if [ "$VERSION" != "$CURRENT_VERSION" ]; then
             echo "NEW_VERSION_NEEDED=true" >> $GITHUB_ENV
@@ -96,7 +96,7 @@ jobs:
           MY_REPO="${{ github.repository }}"
           MY_DOWNLOAD_URL="https://github.com/${MY_REPO}/releases/download/${MY_TAG}/${{ env.FILE_NAME }}"
 
-          # 5. Atualiza o manifesto apontando para o SEU fallback
+          # 5. Atualiza o manifesto OTP.json apontando para o SEU fallback
           jq --arg ver "$VERSION" \
              --arg tag "$MY_TAG" \
              --arg file "$FILE_NAME" \
@@ -110,13 +110,13 @@ jobs:
                 sha256: $sha,
                 updated_at: (now | strftime("%Y-%m-%d %H:%M:%SZ"))
               }' \
-             config/manifest.json > config/manifest.tmp.json
+             config/OTP.json > config/OTP.tmp.json
 
-          mv config/manifest.tmp.json config/manifest.json
+          mv config/OTP.tmp.json config/OTP.json
 
       - name: Commit e Push do Manifesto
         if: env.NEW_VERSION_NEEDED == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "auto(fallback): atualiza Office Tool Plus para a versão ${{ env.VERSION }}"
-          file_pattern: "config/manifest.json"
+          file_pattern: "config/OTP.json"
