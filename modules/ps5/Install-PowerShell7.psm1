@@ -14,7 +14,8 @@ $ProgressPreference    = 'SilentlyContinue'
 
 <#
 .SYNOPSIS
-    Módulo para verificação e instalação automática do PowerShell 7+ via GitHub Releases.
+    Módulo para verificação e instalação automática do PowerShell 7+ via GitHub Releases,
+    com fallback para um JSON "fonte da verdade" e retry em todas as requisições HTTP.
 .NOTES
     Compatível com Windows PowerShell 5.1 propositalmente: este módulo é o ponto de entrada
     do provisionamento e pode ser executado antes de o PowerShell 7+ existir na máquina,
@@ -162,6 +163,57 @@ function Test-Pwsh7Installed {
     }
 }
 
+function Get-Pwsh7FallbackInfo {
+    <#
+    .SYNOPSIS
+        Consulta o JSON de fallback ("fonte da verdade") com a URL e o hash SHA256 do
+        instalador do PowerShell 7+, usado quando a API do GitHub está indisponível.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$FallbackUrl,
+
+        [Parameter(Mandatory)]
+        [string]$AssetPattern,
+
+        [Parameter(Mandatory)]
+        [int]$TimeoutMs,
+
+        [Parameter(Mandatory)]
+        [int]$MaxRetries,
+
+        [Parameter(Mandatory)]
+        [hashtable]$LogParams
+    )
+
+    $data = Invoke-WithRetry -MaxRetries $MaxRetries -RetryIntervalSec 2 -OperationName 'consulta ao JSON de fallback' -LogParams $LogParams -Action {
+        $client = New-TimeoutWebClient -TimeoutMs $TimeoutMs
+        try {
+            $client.DownloadString($FallbackUrl) | ConvertFrom-Json
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+
+    $info = $data.powershell
+    if (-not $info -or -not $info.download_url -or -not $info.filename) {
+        throw [System.FormatException]::new('JSON de fallback com formato inesperado ou incompleto (campo "powershell" ausente).')
+    }
+
+    if ($info.filename -notlike $AssetPattern) {
+        throw [System.NotSupportedException]::new("Fallback não possui instalador compatível com o padrão '$AssetPattern' (encontrado: '$($info.filename)').")
+    }
+
+    return [pscustomobject]@{
+        Url     = $info.download_url
+        Sha256  = $info.sha256
+        Version = $info.version
+    }
+}
+
 #endregion
 
 #region Funções públicas (exportadas)
@@ -179,10 +231,17 @@ function Install-PowerShell7 {
         Timeout, em segundos, para a consulta à API do GitHub.
     .PARAMETER DownloadTimeoutSec
         Timeout, em segundos, para o download do instalador MSI.
+    .PARAMETER FallbackSourceUrl
+        URL do JSON "fonte da verdade" usado como fallback quando a API do GitHub falha
+        após esgotar as tentativas de -MaxRetries (indisponibilidade, rate limit, etc.).
+        Quando o fallback é utilizado e o JSON informa um hash SHA256, a integridade do
+        MSI baixado é verificada antes da instalação.
     .EXAMPLE
         Install-PowerShell7
     .EXAMPLE
         Install-PowerShell7 -Verbose
+    .EXAMPLE
+        Install-PowerShell7 -MaxRetries 5 -FallbackSourceUrl 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/config/fallback/Powershell7.json'
     .OUTPUTS
         System.Boolean
     #>
@@ -199,7 +258,11 @@ function Install-PowerShell7 {
 
         [Parameter()]
         [ValidateRange(30, 900)]
-        [int]$DownloadTimeoutSec = 180
+        [int]$DownloadTimeoutSec = 180,
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$FallbackSourceUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/config/fallback/Powershell7.json'
     )
 
     # Convertidos para milissegundos aqui, no escopo imediato da função: o analisador de lint
@@ -266,8 +329,12 @@ function Install-PowerShell7 {
         $osArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
         $assetPattern = if ($osArch -eq 'ARM64') { '*win-arm64.msi' } else { '*win-x64.msi' }
 
-        # 3. Busca do release via API do GitHub (com retry e timeout)
+        # 3. Busca do release via API do GitHub (com retry e timeout); se esgotar as
+        #    tentativas, cai para o JSON de fallback ("fonte da verdade") antes de desistir.
         Write-Pwsh7InstallLog @logParams -Message 'Buscando release mais recente do PowerShell no GitHub...' -Level STEP
+        $msiUrl = $null
+        $expectedSha256 = $null
+        $releaseSource = 'GitHub'
         try {
             $json = Invoke-WithRetry -MaxRetries $MaxRetries -RetryIntervalSec 2 -OperationName 'consulta à API do GitHub' -LogParams $logParams -Action {
                 $client = New-TimeoutWebClient -TimeoutMs $apiTimeoutMs
@@ -278,16 +345,26 @@ function Install-PowerShell7 {
                     $client.Dispose()
                 }
             }
+
+            $msiUrl = ($json.assets | Where-Object name -like $assetPattern | Select-Object -First 1).browser_download_url
+            if (-not $msiUrl) {
+                throw [System.IO.FileNotFoundException]::new("URL do MSI não encontrada para o padrão '$assetPattern' na resposta da API do GitHub.")
+            }
         }
         catch {
-            Write-Pwsh7InstallLog @logParams -Message "Falha ao consultar API do GitHub: $($_.Exception.Message)" -Level ERRO
-            throw [WebException]::new("Falha ao consultar a API do GitHub: $($_.Exception.Message)", $_.Exception)
-        }
+            Write-Pwsh7InstallLog @logParams -Message "Falha ao obter release via API do GitHub: $($_.Exception.Message). Tentando fonte de fallback ($FallbackSourceUrl)..." -Level ERRO
 
-        $msiUrl = ($json.assets | Where-Object name -like $assetPattern | Select-Object -First 1).browser_download_url
-        if (-not $msiUrl) {
-            Write-Pwsh7InstallLog @logParams -Message "URL do MSI não encontrada para o padrão '$assetPattern'." -Level ERRO
-            throw [System.IO.FileNotFoundException]::new("URL do MSI não encontrada para o padrão '$assetPattern'.")
+            try {
+                $fallbackInfo = Get-Pwsh7FallbackInfo -FallbackUrl $FallbackSourceUrl -AssetPattern $assetPattern -TimeoutMs $apiTimeoutMs -MaxRetries $MaxRetries -LogParams $logParams
+                $msiUrl = $fallbackInfo.Url
+                $expectedSha256 = $fallbackInfo.Sha256
+                $releaseSource = 'Fallback'
+                Write-Pwsh7InstallLog @logParams -Message "Fonte de fallback utilizada com sucesso (versão $($fallbackInfo.Version))." -Level OK
+            }
+            catch {
+                Write-Pwsh7InstallLog @logParams -Message "Falha também na fonte de fallback: $($_.Exception.Message)" -Level ERRO
+                throw [WebException]::new("Falha ao obter URL do instalador via API do GitHub e via fallback: $($_.Exception.Message)", $_.Exception)
+            }
         }
 
         # 4. Download do MSI (com retry e timeout)
@@ -308,10 +385,20 @@ function Install-PowerShell7 {
             if (-not $downloadedFile -or $downloadedFile.Length -eq 0) {
                 throw 'Arquivo MSI baixado está ausente ou vazio.'
             }
+
+            # Verificação de integridade: só é feita quando o hash veio da fonte de fallback,
+            # já que a API do GitHub não fornece um SHA256 previamente conhecido dos assets.
+            if ($expectedSha256) {
+                $actualSha256 = (Get-FileHash -Path $tempMsi -Algorithm SHA256).Hash
+                if ($actualSha256 -ne $expectedSha256.Trim()) {
+                    throw "Hash SHA256 do MSI baixado via fallback não confere (esperado: $expectedSha256; obtido: $actualSha256)."
+                }
+                Write-Pwsh7InstallLog @logParams -Message 'Integridade do MSI (fallback) verificada via SHA256.' -Level OK
+            }
         }
         catch {
-            Write-Pwsh7InstallLog @logParams -Message "Falha no download do MSI: $($_.Exception.Message)" -Level ERRO
-            throw "Falha no download do MSI: $($_.Exception.Message)"
+            Write-Pwsh7InstallLog @logParams -Message "Falha no download do MSI (fonte: $releaseSource): $($_.Exception.Message)" -Level ERRO
+            throw "Falha no download do MSI (fonte: $releaseSource): $($_.Exception.Message)"
         }
 
         # 5. Instalação silenciosa via msiexec
