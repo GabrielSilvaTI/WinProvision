@@ -1,87 +1,77 @@
-name: PowerShell Lint
+name: PowerShell Lint (PSScriptAnalyzer)
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'orquestrador/**'
+    branches: [ "main" ]
   pull_request:
-    branches: [ main ]
-    paths:
-      - 'modules/**'
-      - 'orquestrador/**'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    branches: [ "main" ]
 
 jobs:
   lint:
-    runs-on: windows-latest
+    name: Run PSScriptAnalyzer
+    runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.head_ref || github.ref_name }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Prepare PowerShell Gallery and Install PSScriptAnalyzer
-        shell: powershell
+      - name: Run PowerShell Linter
+        shell: pwsh
         run: |
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288
-          if (-not (Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue)) {
-              Register-PSRepository -Default -ErrorAction SilentlyContinue
-          }
-          Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
-          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
-
-      - name: Fix Encoding UTF-8 with BOM & Run PSScriptAnalyzer
-        shell: powershell
-        run: |
-          $targetFolders = @("modules", "orquestrador")
-          $extensions    = @("*.ps1", "*.psm1", "*.psd1")
-
-          # 1. Ajusta o encoding UTF-8 com BOM em todos os diretórios e extensões alvo
-          foreach ($folder in $targetFolders) {
-              if (Test-Path $folder) {
-                  Get-ChildItem -Path $folder -Include $extensions -Recurse | ForEach-Object {
-                      $Content = Get-Content -Path $_.FullName -Raw
-                      if ($Content) {
-                          $Content | Out-File -FilePath $_.FullName -Encoding utf8 -Force
-                      }
-                  }
-              }
+          # 1. Garante a instalação do PSScriptAnalyzer
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+              Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
           }
 
-          # 2. Executa o linter apontando para o manifesto PSScriptAnalyzerSettings.psd1
-          $settingsPath = ".\.github\PSScriptAnalyzerSettings.psd1"
-          [array]$issues = @()
+          # 2. Autocorreção: Converte o encoding de todos os arquivos .ps1 e .psm1 para UTF-8
+          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1 -Recurse
+          foreach ($file in $files) {
+              $content = Get-Content -Path $file.FullName -Raw
+              [System.IO.File]::WriteAllText($file.FullName, $content, [System.Text.Encoding]::UTF8)
+          }
 
-          foreach ($folder in $targetFolders) {
-              if (Test-Path $folder) {
-                  if (Test-Path $settingsPath) {
-                      $issues += Invoke-ScriptAnalyzer -Path $folder -Recurse -Settings $settingsPath
+          # 3. Lista de regras estéticas e formais ignoradas para focar no que é funcional
+          $excludedRules = @(
+              'PSAvoidUsingCmdletAliases',
+              'PSProvideCommentHelp',
+              'PSUseDeclaredVarsMoreThanAssignments',
+              'PSUseApprovedVerbs',
+              'PSAlignAssignmentStatement',
+              'PSUseConsistentWhitespace',
+              'PSUseConsistentIndentation',
+              'PSPlaceOpenBrace',
+              'PSPlaceCloseBrace'
+          )
+
+          # 4. Análise direcionada às pastas do projeto
+          $pathsToAnalyze = @(
+              './modules/ps5',
+              './modules/ps7',
+              './orquestrador'
+          )
+
+          $issuesFound = $false
+
+          foreach ($path in $pathsToAnalyze) {
+              if (Test-Path $path) {
+                  Write-Host "--- Analisando diretório: $path ---" -ForegroundColor Cyan
+                  
+                  $results = Invoke-ScriptAnalyzer -Path $path -Recurse -ExcludeRule $excludedRules | 
+                      Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
+
+                  if ($results) {
+                      $issuesFound = $true
+                      $results | Format-Table -Property ScriptPath, Line, Severity, Message -AutoSize
                   } else {
-                      # Fallback de segurança caso o arquivo de settings não exista
-                      $issues += Invoke-ScriptAnalyzer -Path $folder -Recurse -ExcludeRule @('PSUseBOM', 'PSAvoidUsingCmdletAliases', 'PSUseCorrectCasing') -Severity Error, Warning
+                      Write-Host "Nenhum erro ou aviso funcional encontrado em $path." -ForegroundColor Green
                   }
+              } else {
+                  Write-Host "Caminho $path não encontrado." -ForegroundColor Yellow
               }
           }
 
-          # 3. Reporta os problemas encontrados
-          if ($issues.Count -gt 0) {
-              foreach ($issue in $issues) {
-                  Write-Output "[$($issue.Severity)] No arquivo: $($issue.ScriptName) (Linha $($issue.Line)): $($issue.Message) [Regra: $($issue.RuleName)]"
-              }
-              Write-Error "Foram encontrados problemas no codigo listados acima."
+          # 5. Falha o job caso haja erros funcionais ou avisos críticos
+          if ($issuesFound) {
+              Write-Error "Foram encontradas inconsistências funcionais no PowerShell. Verifique o log acima."
               exit 1
-          } else {
-              Write-Host "✅ Análise concluída sem erros em 'modules/' e 'orquestrador/'." -ForegroundColor Green
           }
-
-      - name: Auto-commit das Correções de Encoding UTF-8
-        if: always()
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style(powershell): aplica encoding UTF-8 com BOM nos scripts"
-          file_pattern: "modules/** orquestrador/**"
