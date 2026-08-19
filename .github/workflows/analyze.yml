@@ -63,11 +63,11 @@ jobs:
               if (Test-Path $path) {
                   Write-Host "=== Analisando diretório: $path ===" -ForegroundColor Cyan
                   
-                  # Captura individualmente os arquivos do diretório para evitar o erro de parâmetro 'Function'
-                  $targetFiles = Get-ChildItem -Path $path -Include *.ps1, *.psm1, *.psd1 -Recurse
+                  # Converte o caminho dos arquivos explicitamente para [string[]]
+                  [string[]]$targetFiles = (Get-ChildItem -Path $path -Include *.ps1, *.psm1, *.psd1 -Recurse).FullName
                   
-                  if ($targetFiles) {
-                      $results = Invoke-ScriptAnalyzer -Path $targetFiles.FullName -ExcludeRule $excludedRules | 
+                  if ($targetFiles.Count -gt 0) {
+                      $results = Invoke-ScriptAnalyzer -Path $targetFiles -ExcludeRule $excludedRules | 
                           Where-Object { $_.Severity -eq 'Error' -or $_.Severity -eq 'Warning' }
 
                       if ($results) {
@@ -88,7 +88,7 @@ jobs:
               }
           }
 
-          # 5. Interrompe a execução caso encontre Erros ou Warnings funcionais
+          # 5. Interrompe a execução caso encontre erros de lógica
           if ($issuesFound) {
               Write-Error "Foram encontradas inconsistências funcionais no código. Verifique as anotações no repositório."
               exit 1
