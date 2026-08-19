@@ -163,7 +163,15 @@ function Install-Programas {
     .PARAMETER JsonUrl
         URL do arquivo JSON contendo a definição dos pacotes.
     .PARAMETER TempDir
-        Diretório onde o arquivo baixado e os logs serão gravados.
+        Diretório onde o arquivo de configuração baixado é gravado (cache temporário).
+    .PARAMETER LogArchivePath
+        Pasta onde o log desta execução é salvo quando o módulo roda de forma
+        isolada. Mesmo padrão usado pelo WinProvisionLog (Complete-ProvisionLog),
+        para manter os logs do projeto no mesmo lugar.
+    .PARAMETER MaxRetries
+        Número máximo de tentativas por pacote antes de marcar como falha.
+    .PARAMETER RetryDelaySeconds
+        Tempo de espera, em segundos, entre tentativas de um mesmo pacote.
     .EXAMPLE
         Install-Programas -Verbose
     .EXAMPLE
@@ -178,18 +186,33 @@ function Install-Programas {
     param(
         [Parameter()]
         [ValidateNotNullOrEmpty()]
-        [string]$JsonUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/configura%C3%A7%C3%B5es/programas.json',
+        [string]$JsonUrl = 'https://raw.githubusercontent.com/GabrielSilvaTI/WinProvision/refs/heads/main/config/apps/programas.json',
 
         [Parameter()]
         [ValidateNotNullOrEmpty()]
-        [string]$TempDir = [Path]::Combine($env:TEMP, 'WinProvision')
+        [string]$TempDir = [Path]::Combine($env:TEMP, 'WinProvision'),
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogArchivePath = 'C:\ProgramData\WinProvision\Logs',
+
+        [Parameter()]
+        [ValidateRange(1, 10)]
+        [int]$MaxRetries = 3,
+
+        [Parameter()]
+        [ValidateRange(0, 300)]
+        [int]$RetryDelaySeconds = 5
     )
 
     $jsonFile = [Path]::Combine($TempDir, 'Programas.json')
-    $logFile = [Path]::Combine($TempDir, 'winget-idempotente.log')
+    $logFile = [Path]::Combine($LogArchivePath, "Instalar-Programas_$((Get-Date).ToString('yyyyMMdd-HHmmss')).log")
 
     if (-not (Test-Path -Path $TempDir)) {
         $null = New-Item -ItemType Directory -Path $TempDir -Force
+    }
+    if (-not (Test-Path -Path $LogArchivePath)) {
+        $null = New-Item -ItemType Directory -Path $LogArchivePath -Force
     }
 
     # 0. Pré-requisito: winget precisa estar disponível
@@ -197,6 +220,17 @@ function Install-Programas {
         Write-WinProvisionLog -Message 'winget não encontrado no PATH. Verifique se o módulo Install-Winget foi executado antes deste.' -LogFile $logFile -Level ERRO
         throw [System.InvalidOperationException]::new('winget não está disponível no PATH desta sessão.')
     }
+
+    # 0.1 Aquecimento: força a sincronização das fontes agora, fora do loop.
+    # winget sincroniza o índice das fontes automaticamente na primeira chamada
+    # da sessão, e isso é o que deixa o primeiro pacote (install/upgrade)
+    # visivelmente mais lento que os demais. Adiantar aqui evita que esse
+    # custo seja contabilizado, e cobrado, no primeiro pacote do loop.
+    Write-WinProvisionLog -Message 'Sincronizando fontes do winget...' -LogFile $logFile -Level STEP
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $null = winget source update 2>&1
+    $sw.Stop()
+    Write-WinProvisionLog -Message "Fontes sincronizadas em $($sw.Elapsed.TotalSeconds.ToString('0.0'))s." -LogFile $logFile -Level OK
 
     # 1. Download do JSON
     Write-WinProvisionLog -Message 'Baixando arquivo de configuração...' -LogFile $logFile -Level STEP
@@ -241,23 +275,32 @@ function Install-Programas {
         Write-Host "`n-> $id" -ForegroundColor White
 
         $installed = Test-AppInstalled -Id $id
+        $action = $installed ? 'Atualização' : 'Instalação'
 
         if (-not $installed) {
             Write-Host '    Não instalado. Instalando...' -ForegroundColor Yellow
-            $result = Install-App -Id $id -LogFile $logFile
-            $action = 'Instalação'
         }
         else {
             Write-Host '    Já instalado. Verificando atualização...' -ForegroundColor Yellow
-            $result = Update-App -Id $id -LogFile $logFile
-            $action = 'Atualização'
         }
+
+        $attempt = 0
+        do {
+            $attempt++
+            $result = $installed ? (Update-App -Id $id -LogFile $logFile) : (Install-App -Id $id -LogFile $logFile)
+
+            if (-not $result.Success -and $attempt -lt $MaxRetries) {
+                Write-WinProvisionLog -Message "$id ($action) falhou na tentativa $attempt/$MaxRetries. Código: $($result.Code). Tentando novamente em $($RetryDelaySeconds)s..." -LogFile $logFile -Level ERRO
+                Write-Host "    Falha na tentativa $attempt/$MaxRetries. Nova tentativa em $($RetryDelaySeconds)s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $RetryDelaySeconds
+            }
+        } while (-not $result.Success -and $attempt -lt $MaxRetries)
 
         $status = $result.Success ? 'OK' : 'FALHA'
         $level = $result.Success ? 'OK' : 'ERRO'
-        Write-WinProvisionLog -Message "$id ($action) $status. Código: $($result.Code)" -LogFile $logFile -Level $level
+        Write-WinProvisionLog -Message "$id ($action) $status. Código: $($result.Code). Tentativas: $attempt/$MaxRetries" -LogFile $logFile -Level $level
 
-        $results.Add([pscustomobject]@{ Id = $id; Status = $status; Action = $action; Code = $result.Code })
+        $results.Add([pscustomobject]@{ Id = $id; Status = $status; Action = $action; Code = $result.Code; Attempts = $attempt })
     }
 
     # 4. Relatório final
