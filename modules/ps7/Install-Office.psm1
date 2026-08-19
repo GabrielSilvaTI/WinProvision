@@ -145,6 +145,9 @@ function Install-Office {
         API do GitHub (YerongAI/Office-Tool/releases/latest) falha ou está fora do ar.
     .PARAMETER RetryDelaySeconds
         Tempo de espera, em segundos, entre tentativas de obter e extrair o pacote do OTP.
+    .PARAMETER LogArchivePath
+        Pasta onde o log desta execução é salvo. Mesmo padrão usado pelo
+        WinProvisionLog (Complete-ProvisionLog) e pelo Install-Programas.
     .EXAMPLE
         Import-Module .\Install-Office.psd1
         Install-Office
@@ -190,7 +193,11 @@ function Install-Office {
 
         [Parameter()]
         [ValidateRange(0, 300)]
-        [int]$RetryDelaySeconds = 5
+        [int]$RetryDelaySeconds = 5,
+
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$LogArchivePath = 'C:\ProgramData\WinProvision\Logs'
     )
 
     $otpApiUrl = 'https://api.github.com/repos/YerongAI/Office-Tool/releases/latest'
@@ -207,8 +214,8 @@ function Install-Office {
     $pollIntervalSec = 15
     $startGraceMin = 5
 
-    $logDir = Join-Path -Path $env:TEMP -ChildPath 'WinProvision'
-    $logFile = Join-Path -Path $logDir -ChildPath 'office-install.log'
+    $logDir = $LogArchivePath
+    $logFile = Join-Path -Path $logDir -ChildPath "Instalar-Office_$((Get-Date).ToString('yyyyMMdd-HHmmss')).log"
     $mutexName = 'Global\WinProvision_OfficeInstall'
 
     # Splat com os parâmetros fixos de log, reutilizado em todas as chamadas
